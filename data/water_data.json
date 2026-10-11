@@ -1,0 +1,20 @@
+{
+    "cotton t-shirt": {
+        "blue": 500,
+        "green": 2000,
+        "grey": 200,
+        "total": 2700
+    },
+    "plastic bottle": {
+        "blue": 20,
+        "green": 0,
+        "grey": 140,
+        "total": 160
+    },
+    "smartphone": {
+        "blue": 3000,
+        "green": 5000,
+        "grey": 4000,
+        "total": 12000
+    }
+}

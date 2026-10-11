@@ -20,6 +20,10 @@ def process_frame(frame, model, water_db):
   for box in results[0].boxes:
     cls_id = int(box.cls[0])
     class_name = model.names[cls_id]
+
+    if class_name == 'person':
+        continue
+
     if class_name in water_db and class_name not in detected_items:
       detected_items.append(class_name)
 

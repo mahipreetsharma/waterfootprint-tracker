@@ -94,8 +94,9 @@ if app_mode == "🔍 Manual Search Bar":
 elif app_mode == "📷 Live Camera Detection":
   st.subheader("Live Webcam Detection")
   st.write(
-      "Toggle the checkbox below to initialize your webcam and spot objects"
-      " in real-time."
+      "Toggle the checkbox below to initialize your webcam. The system will"
+      " automatically detect eligible objects and ignore people or unlisted"
+      " items."
   )
 
   run = st.checkbox("Turn on Camera")
@@ -113,7 +114,7 @@ elif app_mode == "📷 Live Camera Detection":
       )
       break
 
-    # Process frame through YOLO vision engine
+    # Process frame through YOLO vision engine (filters out people & unlisted items automatically)
     annotated_frame, detected_items = process_frame(frame, model, water_db)
 
     # Convert OpenCV BGR format to RGB for Streamlit UI rendering

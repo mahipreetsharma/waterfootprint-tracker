@@ -5,6 +5,60 @@
         "grey": 200,
         "total": 2700
     },
+    "jeans": {
+        "blue": 2500,
+        "green": 5000,
+        "grey": 1500,
+        "total": 9000
+    },
+    "cotton shirt": {
+        "blue": 400,
+        "green": 1800,
+        "grey": 300,
+        "total": 2500
+    },
+    "cotton trousers": {
+        "blue": 800,
+        "green": 3000,
+        "grey": 700,
+        "total": 4500
+    },
+    "cotton socks pair": {
+        "blue": 100,
+        "green": 400,
+        "grey": 100,
+        "total": 600
+    },
+    "cotton towel": {
+        "blue": 400,
+        "green": 1200,
+        "grey": 400,
+        "total": 2000
+    },
+    "bedsheet": {
+        "blue": 800,
+        "green": 2500,
+        "grey": 700,
+        "total": 4000
+    },
+    "cotton handkerchief": {
+        "blue": 50,
+        "green": 200,
+        "grey": 50,
+        "total": 300
+    },
+    "leather shoes pair": {
+        "blue": 2000,
+        "green": 6000,
+        "grey": 2000,
+        "total": 10000
+    },
+    "canvas shoes pair": {
+        "blue": 500,
+        "green": 1500,
+        "grey": 500,
+        "total": 2500
+    },
     "plastic bottle": {
         "blue": 20,
         "green": 0,
@@ -16,5 +70,552 @@
         "green": 5000,
         "grey": 4000,
         "total": 12000
+    },
+    "laptop": {
+        "blue": 10000,
+        "green": 15000,
+        "grey": 10000,
+        "total": 35000
+    },
+    "desktop computer": {
+        "blue": 15000,
+        "green": 20000,
+        "grey": 15000,
+        "total": 50000
+    },
+    "tablet": {
+        "blue": 5000,
+        "green": 8000,
+        "grey": 5000,
+        "total": 18000
+    },
+    "keyboard": {
+        "blue": 500,
+        "green": 800,
+        "grey": 700,
+        "total": 2000
+    },
+    "computer mouse": {
+        "blue": 200,
+        "green": 300,
+        "grey": 500,
+        "total": 1000
+    },
+    "headphones": {
+        "blue": 500,
+        "green": 800,
+        "grey": 700,
+        "total": 2000
+    },
+    "smartwatch": {
+        "blue": 1000,
+        "green": 1500,
+        "grey": 1500,
+        "total": 4000
+    },
+    "television": {
+        "blue": 5000,
+        "green": 8000,
+        "grey": 7000,
+        "total": 20000
+    },
+    "notebook": {
+        "blue": 5,
+        "green": 30,
+        "grey": 15,
+        "total": 50
+    },
+    "paper sheet": {
+        "blue": 1,
+        "green": 4,
+        "grey": 2,
+        "total": 7
+    },
+    "newspaper": {
+        "blue": 5,
+        "green": 20,
+        "grey": 5,
+        "total": 30
+    },
+    "cardboard box": {
+        "blue": 10,
+        "green": 30,
+        "grey": 10,
+        "total": 50
+    },
+    "wooden pencil": {
+        "blue": 2,
+        "green": 10,
+        "grey": 3,
+        "total": 15
+    },
+    "bar soap": {
+        "blue": 5,
+        "green": 10,
+        "grey": 5,
+        "total": 20
+    },
+    "shampoo": {
+        "blue": 10,
+        "green": 5,
+        "grey": 10,
+        "total": 25
+    },
+    "toothpaste": {
+        "blue": 5,
+        "green": 5,
+        "grey": 5,
+        "total": 15
+    },
+    "toothbrush": {
+        "blue": 10,
+        "green": 5,
+        "grey": 10,
+        "total": 25
+    },
+    "detergent powder": {
+        "blue": 10,
+        "green": 5,
+        "grey": 15,
+        "total": 30
+    },
+    "dishwashing liquid": {
+        "blue": 5,
+        "green": 2,
+        "grey": 13,
+        "total": 20
+    },
+    "laundry soap": {
+        "blue": 5,
+        "green": 5,
+        "grey": 10,
+        "total": 20
+    },
+    "face cream": {
+        "blue": 20,
+        "green": 10,
+        "grey": 20,
+        "total": 50
+    },
+    "body lotion": {
+        "blue": 20,
+        "green": 10,
+        "grey": 20,
+        "total": 50
+    },
+    "perfume": {
+        "blue": 30,
+        "green": 20,
+        "grey": 50,
+        "total": 100
+    },
+    "shaving razor": {
+        "blue": 10,
+        "green": 5,
+        "grey": 10,
+        "total": 25
+    },
+    "sanitary pad": {
+        "blue": 10,
+        "green": 20,
+        "grey": 10,
+        "total": 40
+    },
+    "toilet paper roll": {
+        "blue": 10,
+        "green": 30,
+        "grey": 10,
+        "total": 50
+    },
+    "tissue paper pack": {
+        "blue": 5,
+        "green": 20,
+        "grey": 5,
+        "total": 30
+    },
+    "plastic comb": {
+        "blue": 5,
+        "green": 0,
+        "grey": 15,
+        "total": 20
+    },
+    "rice one kg": {
+        "blue": 1500,
+        "green": 1000,
+        "grey": 500,
+        "total": 3000
+    },
+    "wheat one kg": {
+        "blue": 200,
+        "green": 1200,
+        "grey": 300,
+        "total": 1700
+    },
+    "milk one litre": {
+        "blue": 150,
+        "green": 800,
+        "grey": 100,
+        "total": 1050
+    },
+    "egg one piece": {
+        "blue": 30,
+        "green": 150,
+        "grey": 20,
+        "total": 200
+    },
+    "bread loaf": {
+        "blue": 50,
+        "green": 300,
+        "grey": 50,
+        "total": 400
+    },
+    "apple one piece": {
+        "blue": 20,
+        "green": 50,
+        "grey": 10,
+        "total": 80
+    },
+    "banana one piece": {
+        "blue": 10,
+        "green": 40,
+        "grey": 10,
+        "total": 60
+    },
+    "orange one piece": {
+        "blue": 15,
+        "green": 40,
+        "grey": 15,
+        "total": 70
+    },
+    "potato one kg": {
+        "blue": 50,
+        "green": 200,
+        "grey": 50,
+        "total": 300
+    },
+    "tomato one kg": {
+        "blue": 50,
+        "green": 150,
+        "grey": 50,
+        "total": 250
+    },
+    "onion one kg": {
+        "blue": 50,
+        "green": 150,
+        "grey": 50,
+        "total": 250
+    },
+    "sugar one kg": {
+        "blue": 500,
+        "green": 1000,
+        "grey": 200,
+        "total": 1700
+    },
+    "tea one cup": {
+        "blue": 5,
+        "green": 25,
+        "grey": 5,
+        "total": 35
+    },
+    "coffee one cup": {
+        "blue": 10,
+        "green": 100,
+        "grey": 10,
+        "total": 120
+    },
+    "cooked rice one serving": {
+        "blue": 300,
+        "green": 200,
+        "grey": 100,
+        "total": 600
+    },
+    "chapati one piece": {
+        "blue": 10,
+        "green": 60,
+        "grey": 10,
+        "total": 80
+    },
+    "dal one serving": {
+        "blue": 100,
+        "green": 400,
+        "grey": 100,
+        "total": 600
+    },
+    "paneer one kg": {
+        "blue": 500,
+        "green": 4000,
+        "grey": 500,
+        "total": 5000
+    },
+    "cheese one kg": {
+        "blue": 500,
+        "green": 4000,
+        "grey": 500,
+        "total": 5000
+    },
+    "butter one kg": {
+        "blue": 500,
+        "green": 4000,
+        "grey": 500,
+        "total": 5000
+    },
+    "curd one kg": {
+        "blue": 200,
+        "green": 1000,
+        "grey": 200,
+        "total": 1400
+    },
+    "chocolate bar": {
+        "blue": 100,
+        "green": 500,
+        "grey": 100,
+        "total": 700
+    },
+    "potato chips packet": {
+        "blue": 20,
+        "green": 80,
+        "grey": 20,
+        "total": 120
+    },
+    "biscuit packet": {
+        "blue": 20,
+        "green": 100,
+        "grey": 30,
+        "total": 150
+    },
+    "cooking oil one litre": {
+        "blue": 300,
+        "green": 1500,
+        "grey": 200,
+        "total": 2000
+    },
+    "peanut one kg": {
+        "blue": 200,
+        "green": 2000,
+        "grey": 300,
+        "total": 2500
+    },
+    "almonds one kg": {
+        "blue": 1000,
+        "green": 8000,
+        "grey": 1000,
+        "total": 10000
+    },
+    "tomato ketchup bottle": {
+        "blue": 50,
+        "green": 100,
+        "grey": 50,
+        "total": 200
+    },
+    "mineral water one litre": {
+        "blue": 1,
+        "green": 0,
+        "grey": 4,
+        "total": 5
+    },
+    "paper cup": {
+        "blue": 1,
+        "green": 4,
+        "grey": 1,
+        "total": 6
+    },
+    "disposable plastic plate": {
+        "blue": 1,
+        "green": 0,
+        "grey": 4,
+        "total": 5
+    },
+    "glass drinking cup": {
+        "blue": 50,
+        "green": 100,
+        "grey": 50,
+        "total": 200
+    },
+    "ceramic plate": {
+        "blue": 100,
+        "green": 200,
+        "grey": 200,
+        "total": 500
+    },
+    "steel spoon": {
+        "blue": 100,
+        "green": 100,
+        "grey": 300,
+        "total": 500
+    },
+    "aluminium foil sheet": {
+        "blue": 5,
+        "green": 0,
+        "grey": 15,
+        "total": 20
+    },
+    "plastic shopping bag": {
+        "blue": 2,
+        "green": 0,
+        "grey": 8,
+        "total": 10
+    },
+    "cotton shopping bag": {
+        "blue": 500,
+        "green": 1500,
+        "grey": 500,
+        "total": 2500
+    },
+    "wooden chair": {
+        "blue": 500,
+        "green": 2000,
+        "grey": 500,
+        "total": 3000
+    },
+    "wooden table": {
+        "blue": 1500,
+        "green": 5000,
+        "grey": 1500,
+        "total": 8000
+    },
+    "plastic bucket": {
+        "blue": 50,
+        "green": 0,
+        "grey": 150,
+        "total": 200
+    },
+    "plastic chair": {
+        "blue": 100,
+        "green": 0,
+        "grey": 400,
+        "total": 500
+    },
+    "LED bulb": {
+        "blue": 20,
+        "green": 30,
+        "grey": 50,
+        "total": 100
+    },
+    "ceiling fan": {
+        "blue": 500,
+        "green": 500,
+        "grey": 1000,
+        "total": 2000
+    },
+    "refrigerator": {
+        "blue": 5000,
+        "green": 5000,
+        "grey": 10000,
+        "total": 20000
+    },
+    "washing machine": {
+        "blue": 3000,
+        "green": 3000,
+        "grey": 6000,
+        "total": 12000
+    },
+    "air conditioner": {
+        "blue": 10000,
+        "green": 10000,
+        "grey": 20000,
+        "total": 40000
+    },
+    "electric kettle": {
+        "blue": 500,
+        "green": 500,
+        "grey": 1000,
+        "total": 2000
+    },
+    "electric iron": {
+        "blue": 300,
+        "green": 300,
+        "grey": 400,
+        "total": 1000
+    },
+    "motorcycle": {
+        "blue": 10000,
+        "green": 15000,
+        "grey": 15000,
+        "total": 40000
+    },
+    "bicycle": {
+        "blue": 1000,
+        "green": 2000,
+        "grey": 2000,
+        "total": 5000
+    },
+    "car": {
+        "blue": 50000,
+        "green": 75000,
+        "grey": 75000,
+        "total": 200000
+    },
+    "car tyre": {
+        "blue": 1000,
+        "green": 2000,
+        "grey": 2000,
+        "total": 5000
+    },
+    "rubber slippers pair": {
+        "blue": 100,
+        "green": 100,
+        "grey": 300,
+        "total": 500
+    },
+    "umbrella": {
+        "blue": 100,
+        "green": 100,
+        "grey": 300,
+        "total": 500
+    },
+    "ballpoint pen": {
+        "blue": 2,
+        "green": 3,
+        "grey": 5,
+        "total": 10
+    },
+    "backpack": {
+        "blue": 500,
+        "green": 1000,
+        "grey": 1500,
+        "total": 3000
+    },
+    "brick one piece": {
+        "blue": 1,
+        "green": 0,
+        "grey": 3,
+        "total": 4
+    },
+    "cement one kg": {
+        "blue": 1,
+        "green": 0,
+        "grey": 3,
+        "total": 4
+    },
+    "glass window one square metre": {
+        "blue": 500,
+        "green": 500,
+        "grey": 1000,
+        "total": 2000
+    },
+    "household cleaning sponge": {
+        "blue": 5,
+        "green": 0,
+        "grey": 15,
+        "total": 20
+    },
+    "reusable steel water bottle": {
+        "blue": 200,
+        "green": 100,
+        "grey": 700,
+        "total": 1000
+    },
+    "laptop charger": {
+        "blue": 100,
+        "green": 100,
+        "grey": 300,
+        "total": 500
+    },
+    "power bank": {
+        "blue": 300,
+        "green": 300,
+        "grey": 900,
+        "total": 1500
     }
 }
+

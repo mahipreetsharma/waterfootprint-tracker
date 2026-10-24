@@ -1,5 +1,5 @@
 # Water Footprint Tracker
-
+https://waterfootprint-tracker.streamlit.app/
 A smart AI-powered sustainability platform that helps users estimate the hidden freshwater cost of everyday products. By combining computer vision, product lookup, and water-footprint analytics, the project turns the invisible water behind consumer goods into a clear, interactive, real-time insight.
 
 <p align="center">

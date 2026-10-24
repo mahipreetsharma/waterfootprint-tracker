@@ -178,6 +178,11 @@ button[data-testid="stBaseButton-primary"]:disabled {
 [data-testid="stFileUploader"] { padding:.6rem; border:1px dashed #a8c9cb; border-radius:13px; background:#f9fdfd; }
 [data-testid="stImage"] img { border-radius:13px; }
 [data-testid="stAlert"] { border-radius:12px; }
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"],
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] * {
+  color:#000!important;
+  -webkit-text-fill-color:#000!important;
+}
 [data-testid="stExpander"] { border-color:var(--line)!important; border-radius:12px!important; background:#fff; }
 hr { border-color:var(--line); margin:1.5rem 0; }
 .stCaption,[data-testid="stCaptionContainer"] { color:#6e828b; }

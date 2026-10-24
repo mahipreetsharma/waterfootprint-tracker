@@ -5,3 +5,9 @@ __pycache__/
 venv/
 projectformat.pdf
 .env
+list.txt
+test_vision.py
+test_atlas.py
+upload_atlas.py
+.vscode/
+

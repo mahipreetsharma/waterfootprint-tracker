@@ -6,7 +6,7 @@ This file keeps the existing project integrations:
     utils.vision_engine.load_yolo_model
     utils.vision_engine.process_frame
 
-Run from the project root with: streamlit run aquatrace_app_redesigned.py
+Run from the project root with: streamlit run app.py
 """
 
 from __future__ import annotations
@@ -281,21 +281,44 @@ def safe_water_value(item_data: dict[str, Any], key: str) -> float:
         return 0.0
 
 
+def has_component_breakdown(item_data: dict[str, Any]) -> bool:
+    return all(
+        isinstance(item_data.get(key), (int, float))
+        for key in ("blue", "green", "grey")
+    )
+
+
+def footprint_unit(item_data: dict[str, Any]) -> str:
+    unit = item_data.get("unit", "item")
+    return unit if isinstance(unit, str) and unit else "item"
+
+
 def display_footprint_analysis(query_name: str, item_data: dict[str, Any], quantity: int = 1) -> None:
     """Render overview, component breakdown and everyday comparisons."""
     total_l = safe_water_value(item_data, "total") * quantity
-    blue_l = safe_water_value(item_data, "blue") * quantity
-    green_l = safe_water_value(item_data, "green") * quantity
-    grey_l = safe_water_value(item_data, "grey") * quantity
+    components_available = has_component_breakdown(item_data)
+    unit = footprint_unit(item_data)
+    blue_l = safe_water_value(item_data, "blue") * quantity if components_available else 0
+    green_l = safe_water_value(item_data, "green") * quantity if components_available else 0
+    grey_l = safe_water_value(item_data, "grey") * quantity if components_available else 0
     safe_name = html.escape(query_name.strip().title())
 
     st.markdown(
         f'<div class="section-kicker">Your results</div>'
         f'<h2 class="section-title">Water footprint for {safe_name}</h2>'
-        f'<p class="section-copy">Estimated footprint for <b>{quantity}</b> unit(s). '
+        f'<p class="section-copy">Estimated footprint for <b>{quantity}</b> × '
+        f'<b>{html.escape(unit)}</b>. '
         'Use the tabs below to explore the total, water types and everyday equivalents.</p>',
         unsafe_allow_html=True,
     )
+    if item_data.get("estimate_type") == "illustrative_generic":
+        st.warning(
+            item_data.get(
+                "estimate_note",
+                "This is a rough illustrative estimate, not an authoritative "
+                "product-specific measurement.",
+            )
+        )
 
     tab_summary, tab_breakdown, tab_equivalents = st.tabs(
         ["✦ Overview", "◉ Component breakdown", "↗ Everyday equivalents"]
@@ -303,10 +326,15 @@ def display_footprint_analysis(query_name: str, item_data: dict[str, Any], quant
 
     with tab_summary:
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total footprint", fmt_liters(total_l))
-        m2.metric("Blue water", fmt_liters(blue_l), percent(blue_l, total_l))
-        m3.metric("Green water", fmt_liters(green_l), percent(green_l, total_l))
-        m4.metric("Grey water", fmt_liters(grey_l), percent(grey_l, total_l))
+        m1.metric(f"Total footprint · {unit}", fmt_liters(total_l))
+        if components_available:
+            m2.metric("Blue water", fmt_liters(blue_l), percent(blue_l, total_l))
+            m3.metric("Green water", fmt_liters(green_l), percent(green_l, total_l))
+            m4.metric("Grey water", fmt_liters(grey_l), percent(grey_l, total_l))
+        else:
+            m2.metric("Blue water", "Not available")
+            m3.metric("Green water", "Not available")
+            m4.metric("Grey water", "Not available")
         st.markdown(
             '<div class="surface-card" style="margin-top:1rem;">'
             '<b>Reading this result</b><p style="margin:.45rem 0 0;color:#58717d;line-height:1.7;">'
@@ -318,27 +346,37 @@ def display_footprint_analysis(query_name: str, item_data: dict[str, Any], quant
 
     with tab_breakdown:
         col_text, col_chart = st.columns([1.05, 1], gap="large")
-        with col_text:
-            st.markdown("#### Where does the water go?")
-            st.markdown(
-                f'<div class="blue-card"><b>Blue water · {fmt_liters(blue_l)}</b><br>'
-                '<span>Fresh surface water and groundwater from rivers, lakes and aquifers, often used for irrigation or manufacturing.</span></div>'
-                f'<div class="green-card"><b>Green water · {fmt_liters(green_l)}</b><br>'
-                '<span>Rainwater held in soil and used by plants through growth and evapotranspiration.</span></div>'
-                f'<div class="grey-card"><b>Grey water · {fmt_liters(grey_l)}</b><br>'
-                '<span>An indicator of the freshwater volume needed to assimilate pollutants to applicable water-quality standards.</span></div>',
-                unsafe_allow_html=True,
-            )
-        with col_chart:
-            st.markdown("#### Volumetric distribution")
-            chart_df = pd.DataFrame(
-                {
-                    "Water component": ["Blue", "Green", "Grey"],
-                    "Liters": [blue_l, green_l, grey_l],
-                }
-            )
-            st.bar_chart(chart_df, x="Water component", y="Liters", height=300)
-            st.caption("The chart uses the component values returned by your local footprint database.")
+        if components_available:
+            with col_text:
+                st.markdown("#### Where does the water go?")
+                st.markdown(
+                    f'<div class="blue-card"><b>Blue water · {fmt_liters(blue_l)}</b><br>'
+                    '<span>Fresh surface water and groundwater from rivers, lakes and aquifers, often used for irrigation or manufacturing.</span></div>'
+                    f'<div class="green-card"><b>Green water · {fmt_liters(green_l)}</b><br>'
+                    '<span>Rainwater held in soil and used by plants through growth and evapotranspiration.</span></div>'
+                    f'<div class="grey-card"><b>Grey water · {fmt_liters(grey_l)}</b><br>'
+                    '<span>An indicator of the freshwater volume needed to assimilate pollutants to applicable water-quality standards.</span></div>',
+                    unsafe_allow_html=True,
+                )
+            with col_chart:
+                st.markdown("#### Volumetric distribution")
+                chart_df = pd.DataFrame(
+                    {
+                        "Water component": ["Blue", "Green", "Grey"],
+                        "Liters": [blue_l, green_l, grey_l],
+                    }
+                )
+                st.bar_chart(chart_df, x="Water component", y="Liters", height=300)
+                st.caption("The chart uses the component values returned by your local footprint database.")
+        else:
+            with col_text:
+                st.info(
+                    "The source provides an aggregate footprint total only; "
+                    "blue, green, and grey component values are not available."
+                )
+            with col_chart:
+                st.markdown("#### Component distribution")
+                st.caption("No chart is shown because component-level values are unavailable.")
 
     with tab_equivalents:
         st.markdown("#### Put the footprint into perspective")
@@ -363,6 +401,14 @@ def render_detection_telemetry(detected_items: list[str], database: dict[str, An
 
     total_image_water = sum(safe_water_value(database[item], "total") for item in matched_items)
     st.metric("Estimated detected footprint", fmt_liters(total_image_water))
+    if any(
+        database[item].get("estimate_type") == "illustrative_generic"
+        for item in matched_items
+    ):
+        st.warning(
+            "Some detected-item values are rough illustrative estimates, not "
+            "authoritative product-specific measurements."
+        )
     st.markdown(
         '<div class="section-kicker">Recognized objects</div>',
         unsafe_allow_html=True,
@@ -372,12 +418,18 @@ def render_detection_telemetry(detected_items: list[str], database: dict[str, An
         with st.container(border=True):
             item_col, total_col = st.columns([2, 1])
             item_col.markdown(f"**{html.escape(item.title())}**")
-            item_col.caption(
-                f"Blue {fmt_liters(safe_water_value(data, 'blue'))}  ·  "
-                f"Green {fmt_liters(safe_water_value(data, 'green'))}  ·  "
-                f"Grey {fmt_liters(safe_water_value(data, 'grey'))}"
+            if has_component_breakdown(data):
+                item_col.caption(
+                    f"Blue {fmt_liters(safe_water_value(data, 'blue'))}  ·  "
+                    f"Green {fmt_liters(safe_water_value(data, 'green'))}  ·  "
+                    f"Grey {fmt_liters(safe_water_value(data, 'grey'))}"
+                )
+            else:
+                item_col.caption("Blue/green/grey split unavailable from the source.")
+            total_col.metric(
+                f"Per detected item · {footprint_unit(data)}",
+                fmt_liters(safe_water_value(data, "total")),
             )
-            total_col.metric("Per detected item", fmt_liters(safe_water_value(data, "total")))
 
 
 # -----------------------------------------------------------------------------
@@ -502,7 +554,7 @@ with st.container(border=True):
                     max_value=100,
                     step=1,
                     key="lookup_quantity",
-                    help="Multiply the stored per-item estimate by this amount.",
+                    help="Multiplies the estimate by the recorded unit, such as one item or one 100 g portion.",
                 )
             with submit_col:
                 submit_lookup = st.form_submit_button("Analyze footprint", type="primary", use_container_width=True)
@@ -619,7 +671,7 @@ elif st.session_state.app_mode == "image":
     st.markdown('<div class="section-kicker">Mode 02</div>', unsafe_allow_html=True)
     st.markdown('<h3 class="section-title">Analyze an image</h3>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="section-copy">Choose a clear photo. The vision model will detect recognizable objects and match them to entries in your local water-footprint database. Uploading alone does not run the analysis; use the button below.</p>',
+        '<p class="section-copy">Choose a clear photo. The vision model detects only its supported object classes that map to entries in your local water-footprint database; products without a matching model class cannot be recognized. People are excluded. Uploading alone does not run the analysis; use the button below.</p>',
         unsafe_allow_html=True,
     )
     uploaded_file = st.file_uploader(
@@ -690,7 +742,7 @@ elif st.session_state.app_mode == "camera":
     st.markdown('<div class="section-kicker">Mode 03</div>', unsafe_allow_html=True)
     st.markdown('<h3 class="section-title">Live camera scanner</h3>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="section-copy">Start the scanner to analyze frames from the webcam attached to the machine running Streamlit. This OpenCV webcam mode is intended for a local app; a cloud-hosted app generally needs a browser-streaming component such as streamlit-webrtc.</p>',
+        '<p class="section-copy">Start the scanner to analyze frames from the webcam attached to the machine running Streamlit. Detection is limited to supported model classes that map to the water-footprint database; people and unsupported products are excluded. This OpenCV webcam mode is intended for a local app; a cloud-hosted app generally needs a browser-streaming component such as streamlit-webrtc.</p>',
         unsafe_allow_html=True,
     )
 

@@ -1,5 +1,6 @@
 from pymongo import MongoClient
 from functools import lru_cache
+from utils.item_names import ITEM_ALIASES, normalize_item_name
 
 # Connect to MongoDB
 client = MongoClient(
@@ -26,25 +27,14 @@ def load_water_data():
 
 def get_item_footprint(query):
     water_db = load_water_data()
-    query = query.lower().strip()
+    query = normalize_item_name(query)
 
     # Exact match
     if query in water_db:
         return water_db[query]
 
     # Common aliases
-    aliases = {
-        "bottle": "plastic bottle",
-        "mobile": "cell phone",
-        "phone": "cell phone",
-        "computer": "desktop computer",
-        "mouse": "computer mouse",
-        "tv": "television",
-        "tshirt": "cotton t-shirt",
-        "t-shirt": "cotton t-shirt",
-    }
-
-    item_name = aliases.get(query)
+    item_name = ITEM_ALIASES.get(query)
 
     if item_name:
         return water_db.get(item_name)
@@ -99,25 +89,14 @@ def load_water_data():
 
 def get_item_footprint(query):
     water_db = load_water_data()
-    query = query.lower().strip()
+    query = normalize_item_name(query)
 
     # Exact match
     if query in water_db:
         return water_db[query]
 
     # Common aliases
-    aliases = {
-        "bottle": "plastic bottle",
-        "mobile": "cell phone",
-        "phone": "cell phone",
-        "computer": "desktop computer",
-        "mouse": "computer mouse",
-        "tv": "television",
-        "tshirt": "cotton t-shirt",
-        "t-shirt": "cotton t-shirt",
-    }
-
-    item_name = aliases.get(query)
+    item_name = ITEM_ALIASES.get(query)
 
     if item_name:
         return water_db.get(item_name)

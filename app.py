@@ -167,7 +167,141 @@ class VisionServerState:
     lock = threading.Lock()
 
 
+def run_detection_pipeline(img_bytes: bytes) -> dict[str, Any]:
+    """Execute YOLO26N vision model and compute water footprint telemetry."""
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise ValueError("Invalid image bytes")
+
+    # Store image temporarily in temp_uploads with automatic time-based deletion
+    save_temp_image(img_bytes, prefix="upload")
+
+    annotated_frame, detected_items = process_frame(frame, yolo_model, water_db)
+    _, buf = cv2.imencode(".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    annotated_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode("utf-8")
+
+    items_out = []
+    total_water = 0.0
+    total_blue = 0.0
+    total_green = 0.0
+    total_grey = 0.0
+    for item in detected_items:
+        d = water_db.get(item, {})
+        tot = safe_water_value(d, "total")
+        b = safe_water_value(d, "blue")
+        g = safe_water_value(d, "green")
+        gy = safe_water_value(d, "grey")
+        u = footprint_unit(d)
+        total_water += tot
+        total_blue += b
+        total_green += g
+        total_grey += gy
+        items_out.append({
+            "name": str(item).title(),
+            "total": tot,
+            "blue": b,
+            "green": g,
+            "grey": gy,
+            "unit": u,
+        })
+
+    return {
+        "status": "ok",
+        "detected_count": len(detected_items),
+        "items": items_out,
+        "total_liters": round(total_water, 1),
+        "total_blue": round(total_blue, 1),
+        "total_green": round(total_green, 1),
+        "total_grey": round(total_grey, 1),
+        "showers": round(total_water / 65, 1) if total_water > 0 else 0,
+        "drinking_days": round(total_water / 3, 0) if total_water > 0 else 0,
+        "bathtubs": round(total_water / 150, 1) if total_water > 0 else 0,
+        "flushes": round(total_water / 6, 0) if total_water > 0 else 0,
+        "annotated_image": annotated_b64,
+    }
+
+
+def inject_starlette_api_route() -> None:
+    """Dynamically register /api/detect on the main Streamlit server port (works on Streamlit Cloud HTTPS)."""
+    try:
+        import gc
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+        from starlette.responses import JSONResponse, Response
+
+        apps = [obj for obj in gc.get_objects() if isinstance(obj, Starlette)]
+        for app in apps:
+            existing_paths = [getattr(r, "path", None) for r in getattr(app, "routes", [])]
+            if "/api/detect" in existing_paths:
+                continue
+
+            async def api_detect(request):
+                if request.method == "OPTIONS":
+                    return Response(status_code=200, headers={
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+                        "Access-Control-Allow-Headers": "Content-Type",
+                    })
+                try:
+                    body = await request.json()
+                    img_data = body.get("image", "")
+                    if "," in img_data:
+                        _, img_data = img_data.split(",", 1)
+                    img_bytes = base64.b64decode(img_data)
+                    result = run_detection_pipeline(img_bytes)
+                    return JSONResponse(result, headers={"Access-Control-Allow-Origin": "*"})
+                except Exception as e:
+                    return JSONResponse({"status": "error", "message": str(e)}, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
+
+            async def api_status(request):
+                return JSONResponse({"status": "active", "model": "yolo26n"}, headers={"Access-Control-Allow-Origin": "*"})
+
+            app.routes.insert(0, Route("/api/detect", api_detect, methods=["POST", "OPTIONS"]))
+            app.routes.insert(0, Route("/api/status", api_status, methods=["GET", "OPTIONS"]))
+    except Exception:
+        pass
+
+    # Also support Tornado if running in Tornado mode
+    try:
+        import gc
+        import tornado.web
+
+        tornado_apps = [obj for obj in gc.get_objects() if isinstance(obj, tornado.web.Application)]
+        for tapp in tornado_apps:
+            class TornadoDetectHandler(tornado.web.RequestHandler):
+                def set_default_headers(self):
+                    self.set_header("Access-Control-Allow-Origin", "*")
+                    self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+                    self.set_header("Access-Control-Allow-Headers", "Content-Type")
+
+                def options(self):
+                    self.set_status(200)
+                    self.finish()
+
+                def post(self):
+                    data = json.loads(self.request.body.decode("utf-8"))
+                    img_data = data.get("image", "")
+                    if "," in img_data:
+                        _, img_data = img_data.split(",", 1)
+                    img_bytes = base64.b64decode(img_data)
+                    result = run_detection_pipeline(img_bytes)
+                    self.set_header("Content-Type", "application/json")
+                    self.write(json.dumps(result))
+
+                def get(self):
+                    self.write(json.dumps({"status": "active", "model": "yolo26n"}))
+
+            tapp.add_handlers(r".*", [(r"/api/detect", TornadoDetectHandler), (r"/api/status", TornadoDetectHandler)])
+    except Exception:
+        pass
+
+
+inject_starlette_api_route()
+
+
 class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
+    """Local fallback HTTP server on port 8502."""
     def _send_cors(self, status=200, content_type="application/json"):
         self.send_response(status)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -179,57 +313,6 @@ class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._send_cors(200)
 
-    def _process_image_and_reply(self, frame):
-        try:
-            annotated_frame, detected_items = process_frame(frame, yolo_model, water_db)
-            _, buf = cv2.imencode(".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            annotated_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode("utf-8")
-
-            items_out = []
-            total_water = 0.0
-            total_blue = 0.0
-            total_green = 0.0
-            total_grey = 0.0
-            for item in detected_items:
-                d = water_db.get(item, {})
-                tot = safe_water_value(d, "total")
-                b = safe_water_value(d, "blue")
-                g = safe_water_value(d, "green")
-                gy = safe_water_value(d, "grey")
-                u = footprint_unit(d)
-                total_water += tot
-                total_blue += b
-                total_green += g
-                total_grey += gy
-                items_out.append({
-                    "name": str(item).title(),
-                    "total": tot,
-                    "blue": b,
-                    "green": g,
-                    "grey": gy,
-                    "unit": u,
-                })
-
-            resp = {
-                "status": "ok",
-                "detected_count": len(detected_items),
-                "items": items_out,
-                "total_liters": round(total_water, 1),
-                "total_blue": round(total_blue, 1),
-                "total_green": round(total_green, 1),
-                "total_grey": round(total_grey, 1),
-                "showers": round(total_water / 65, 1) if total_water > 0 else 0,
-                "drinking_days": round(total_water / 3, 0) if total_water > 0 else 0,
-                "bathtubs": round(total_water / 150, 1) if total_water > 0 else 0,
-                "flushes": round(total_water / 6, 0) if total_water > 0 else 0,
-                "annotated_image": annotated_b64,
-            }
-            self._send_cors(200)
-            self.wfile.write(json.dumps(resp).encode("utf-8"))
-        except Exception as e:
-            self._send_cors(500)
-            self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
-
     def do_POST(self):
         if self.path == "/api/detect":
             try:
@@ -240,18 +323,9 @@ class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
                 if "," in img_data:
                     _, img_data = img_data.split(",", 1)
                 img_bytes = base64.b64decode(img_data)
-                nparr = np.frombuffer(img_bytes, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-                if frame is None:
-                    self._send_cors(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": "Invalid image"}).encode("utf-8"))
-                    return
-
-                # Store image temporarily in temp_uploads with automatic time-based deletion
-                save_temp_image(img_bytes, prefix="upload")
-
-                self._process_image_and_reply(frame)
+                result = run_detection_pipeline(img_bytes)
+                self._send_cors(200)
+                self.wfile.write(json.dumps(result).encode("utf-8"))
             except Exception as e:
                 self._send_cors(500)
                 self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
@@ -276,11 +350,10 @@ class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps({"status": "error", "message": "Failed to read camera frame"}).encode("utf-8"))
                     return
 
-                # Store frame temporarily in temp_uploads with automatic time-based deletion
                 _, enc = cv2.imencode(".jpg", frame)
-                save_temp_image(enc.tobytes(), prefix="opencv")
-
-                self._process_image_and_reply(frame)
+                result = run_detection_pipeline(enc.tobytes())
+                self._send_cors(200)
+                self.wfile.write(json.dumps(result).encode("utf-8"))
             except Exception as e:
                 self._send_cors(500)
                 self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
@@ -1692,9 +1765,35 @@ html, body {{
     const captureCanvas = document.createElement('canvas');
     const captureCtx = captureCanvas.getContext('2d');
 
-    const getVisionApiUrl = (endpoint) => {{
-        const host = (window.parent && window.parent.location && window.parent.location.hostname) || window.location.hostname || '127.0.0.1';
-        return `http://${{host}}:8502${{endpoint}}`;
+    const callVisionApi = async (endpoint, options = {{}}) => {{
+        const candidateUrls = [];
+
+        // 1. Same-origin primary URL (main Streamlit server: port 8501 locally or HTTPS on Streamlit Cloud)
+        try {{
+            if (window.parent && window.parent.location && window.parent.location.origin) {{
+                candidateUrls.push(window.parent.location.origin + endpoint);
+            }}
+        }} catch (e) {{}}
+        candidateUrls.push(endpoint);
+
+        // 2. Secondary fallback for standalone localhost:8502
+        try {{
+            const host = (window.parent && window.parent.location && window.parent.location.hostname) || window.location.hostname || '127.0.0.1';
+            candidateUrls.push(`http://${{host}}:8502${{endpoint}}`);
+        }} catch (e) {{}}
+
+        let lastErr = null;
+        for (const url of candidateUrls) {{
+            try {{
+                const resp = await fetch(url, options);
+                if (resp.ok) {{
+                    return await resp.json();
+                }}
+            }} catch (err) {{
+                lastErr = err;
+            }}
+        }}
+        throw lastErr || new Error('All vision endpoints unreachable');
     }};
 
     // Ensure parent iframe permits camera access
@@ -1797,19 +1896,12 @@ html, body {{
             annotatedStream.style.display = 'block';
 
             try {{
-                const resp = await fetch(getVisionApiUrl('/api/detect'), {{
+                const data = await callVisionApi('/api/detect', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ image: dataUrl }})
                 }});
-
-                if (resp.ok) {{
-                    const data = await resp.json();
-                    renderDetectionResults(data, 'Uploaded Photo');
-                }} else {{
-                    camStatus.textContent = '● Analysis Failed';
-                    camStatus.style.color = '#ef4444';
-                }}
+                renderDetectionResults(data, 'Uploaded Photo');
             }} catch (err) {{
                 console.warn('Upload inference call failed:', err);
                 camStatus.textContent = '● API Server Offline';
@@ -1899,16 +1991,12 @@ html, body {{
             captureCtx.drawImage(webcamStream, 0, 0, 480, 360);
             const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.72);
 
-            const resp = await fetch(getVisionApiUrl('/api/detect'), {{
+            const data = await callVisionApi('/api/detect', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ image: dataUrl }})
             }});
-
-            if (resp.ok) {{
-                const data = await resp.json();
-                renderDetectionResults(data, 'Live Webcam');
-            }}
+            renderDetectionResults(data, 'Live Webcam');
         }} catch (err) {{
             console.warn('YOLO inference call failed:', err);
         }} finally {{
@@ -1973,19 +2061,14 @@ html, body {{
         camStatus.style.color = '#38bdf8';
         videoPh.style.display = 'none';
         try {{
-            const resp = await fetch(getVisionApiUrl('/api/capture_opencv'));
-            if (resp.ok) {{
-                const data = await resp.json();
-                renderDetectionResults(data, 'OpenCV Hardware');
-                annotatedStream.style.display = 'block';
-            }} else {{
-                const errData = await resp.json();
-                camStatus.textContent = '● OpenCV Error: ' + (errData.message || 'Failed');
-                camStatus.style.color = '#ef4444';
-                videoPh.style.display = 'block';
-            }}
+            const data = await callVisionApi('/api/capture_opencv');
+            renderDetectionResults(data, 'OpenCV Hardware');
+            annotatedStream.style.display = 'block';
         }} catch (err) {{
-            camStatus.textContent = '● OpenCV Connection Failed';
+            camStatus.textContent = '● OpenCV Error / Not Available on Cloud';
+            camStatus.style.color = '#ef4444';
+            videoPh.style.display = 'block';
+        }}
             camStatus.style.color = '#ef4444';
             videoPh.style.display = 'block';
         }}

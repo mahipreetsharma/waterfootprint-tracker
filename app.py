@@ -275,6 +275,10 @@ def inject_starlette_api_route() -> None:
             return JSONResponse(run_opencv_capture(), headers={"Access-Control-Allow-Origin": "*"})
 
         asgi_routes = [
+            Route("/_stcore/upload_file/detect", api_detect, methods=["POST", "GET", "OPTIONS"]),
+            Route("/_stcore/upload_file/detect/", api_detect, methods=["POST", "GET", "OPTIONS"]),
+            Route("/_stcore/upload_file/status", api_status, methods=["GET", "OPTIONS"]),
+            Route("/_stcore/upload_file/capture_opencv", api_opencv, methods=["GET", "POST", "OPTIONS"]),
             Route("/_stcore/detect", api_detect, methods=["POST", "GET", "OPTIONS"]),
             Route("/_stcore/detect/", api_detect, methods=["POST", "GET", "OPTIONS"]),
             Route("/api/detect", api_detect, methods=["POST", "GET", "OPTIONS"]),
@@ -293,7 +297,7 @@ def inject_starlette_api_route() -> None:
 
             if target_list is not None:
                 existing = [getattr(r, "path", None) for r in target_list]
-                if "/_stcore/detect" not in existing:
+                if "/_stcore/upload_file/detect" not in existing:
                     for r in reversed(asgi_routes):
                         target_list.insert(0, r)
                     injected_count += 1
@@ -345,6 +349,9 @@ def inject_starlette_api_route() -> None:
                     self.write(json.dumps({"status": "active", "model": "yolo26n"}))
 
         tornado_specs = [
+            URLSpec(r".*/_stcore/upload_file/detect/?", TornadoDetectHandler),
+            URLSpec(r".*/_stcore/upload_file/status/?", TornadoDetectHandler),
+            URLSpec(r".*/_stcore/upload_file/capture_opencv/?", TornadoDetectHandler),
             URLSpec(r".*/_stcore/detect/?", TornadoDetectHandler),
             URLSpec(r".*/_stcore/status/?", TornadoDetectHandler),
             URLSpec(r".*/api/detect/?", TornadoDetectHandler),
@@ -361,7 +368,7 @@ def inject_starlette_api_route() -> None:
                     m = getattr(r, "matcher", None)
                     p = getattr(getattr(m, "regex", None), "pattern", "")
                     existing.append(p)
-                if not any(".*/_stcore/detect/?" in p for p in existing):
+                if not any(".*/_stcore/upload_file/detect/?" in p for p in existing):
                     for s in reversed(tornado_specs):
                         rules_list.insert(0, s)
                     injected_count += 1
@@ -1946,19 +1953,24 @@ setTimeout(function() {{
         // 1. Parent origin targets (works on Streamlit Cloud over HTTPS)
         if (parentOrigin) {{
             const cleanOrigin = parentOrigin.endsWith('/') ? parentOrigin.slice(0, -1) : parentOrigin;
+            // High priority: Streamlit Cloud whitelist proxy endpoint
+            candidateUrls.push(cleanOrigin + '/_stcore/upload_file' + baseEndpoint);
             candidateUrls.push(cleanOrigin + '/_stcore' + baseEndpoint);
             candidateUrls.push(cleanOrigin + '/api' + baseEndpoint);
             candidateUrls.push(cleanOrigin + endpoint);
         }}
 
         // 2. Relative targets
+        candidateUrls.push('/_stcore/upload_file' + baseEndpoint);
         candidateUrls.push('/_stcore' + baseEndpoint);
         candidateUrls.push('/api' + baseEndpoint);
         candidateUrls.push(endpoint);
 
         // 3. Fallbacks for localhost development
+        candidateUrls.push(`http://127.0.0.1:8501/_stcore/upload_file${{baseEndpoint}}`);
         candidateUrls.push(`http://127.0.0.1:8501/_stcore${{baseEndpoint}}`);
         candidateUrls.push(`http://127.0.0.1:8501${{endpoint}}`);
+        candidateUrls.push(`http://localhost:8501/_stcore/upload_file${{baseEndpoint}}`);
         candidateUrls.push(`http://localhost:8501/_stcore${{baseEndpoint}}`);
         candidateUrls.push(`http://localhost:8501${{endpoint}}`);
         candidateUrls.push(`http://127.0.0.1:8502${{endpoint}}`);

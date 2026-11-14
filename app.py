@@ -1,282 +1,88 @@
-"""AquaTrace — redesigned Streamlit frontend for water-footprint analysis.
+"""AquaTrace — Unified Scrollytelling Water Footprint Intelligence.
 
-This file keeps the existing project integrations:
-    utils.database_handler.get_item_footprint
-    utils.database_handler.load_water_data
-    utils.vision_engine.load_yolo_model
-    utils.vision_engine.process_frame
+All capabilities unified into a SINGLE continuous, cinematic scrollytelling experience:
+  - Atmospheric 199-frame liquid canvas background with momentum LERP physics.
+  - As the user scrolls, the Heading of each section fades in at the TOP of the animation.
+  - The interactive components (Calculator, Vision Scanner, Science Pillars, Action Plan) fade in at the BOTTOM.
+  - Multi-source scroll sync: Mouse wheel, trackpad, touchscreen swipe, timeline scrubbing, and auto-play.
 
-Run from the project root with: streamlit run app.py
+Run with: streamlit run appdesigned.py
 """
 
 from __future__ import annotations
 
-import html
-import hashlib
+import base64
+import http.server
+import json
+import os
+import shutil
+import socketserver
+import threading
+from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
-import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
-from utils.database_handler import get_item_footprint, load_water_data
+from utils.database_handler import load_water_data
 from utils.vision_engine import load_yolo_model, process_frame
 
-
 # -----------------------------------------------------------------------------
-# 1. Page configuration and design system
+# 1. Page Configuration (Full-Bleed Obsidian Dark Canvas)
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="AquaTrace | Water Footprint Intelligence",
     page_icon="💧",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-CUSTOM_CSS = r"""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
-:root {
-  --ink: #132c38; --ink-soft: #49616d; --muted: #6e828b;
-  --paper: #f4f7f6; --white: #fff; --line: #dce7e7;
-  --teal: #078b91; --teal-bright: #20c5b4; --navy: #082e3c;
-  --blue: #2788c9; --blue-bg: #edf7ff; --green: #289966; --green-bg: #eefaf2;
-  --grey: #71828b; --grey-bg: #f1f4f5;
-}
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-.stApp { color: var(--ink); background: var(--paper); }
-[data-testid="stHeader"] { background: rgba(244,247,246,.92); }
-.block-container { max-width: 1440px; padding-top: 1.3rem; padding-bottom: 3.5rem; }
-[data-testid="stSidebar"] { background: #0a303e; border-right: 1px solid rgba(255,255,255,.08); }
-[data-testid="stSidebar"] * { color: #eef9fa; }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: #c7dfe3; }
-[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,.16); }
-[data-testid="stSidebar"] [data-testid="stProgressBar"] > div > div { background: #37c8b8; }
+# -----------------------------------------------------------------------------
+# 2. Asset Pipeline for Scrollytelling Frames
+# -----------------------------------------------------------------------------
+BASE_DIR = Path(__file__).parent.resolve()
+WATERDROP_SRC = BASE_DIR / "waterdrop"
+STATIC_DIR = BASE_DIR / "static"
+STATIC_WATERDROP = STATIC_DIR / "waterdrop"
 
-/* Water-lab hero: high contrast, calm background, animated ripple rings. */
-.main-header { position:relative; isolation:isolate; overflow:hidden; display:flex; align-items:center; min-height:290px;
-  padding: clamp(1.5rem, 4vw, 3rem); margin:.2rem 0 1.8rem; color:#fff; border-radius:26px;
-  background: linear-gradient(108deg,#092c3a 0%,#0b4554 62%,#087d83 100%);
-  box-shadow: 0 18px 40px rgba(7,48,62,.13); animation: rise-in .55s ease both; }
-.main-header::before { content:""; position:absolute; z-index:-1; right:-68px; top:-190px; width:420px; height:420px;
-  border:1px solid rgba(181,255,246,.3); border-radius:50%; box-shadow:0 0 0 28px rgba(181,255,246,.055),0 0 0 62px rgba(181,255,246,.035),0 0 0 98px rgba(181,255,246,.025);
-  animation:ripple 14s ease-in-out infinite alternate; }
-.main-header::after { content:""; position:absolute; z-index:-1; width:230px; height:230px; right:12%; bottom:-180px; border-radius:50%; background:rgba(32,197,180,.22); filter:blur(2px); }
-.hero-layout { display:grid; grid-template-columns:minmax(0,1fr) 240px; gap:2rem; align-items:center; width:100%; }
-.hero-content { max-width:820px; }
-.hero-eyebrow { display:inline-flex; align-items:center; gap:.5rem; padding:.42rem .72rem; margin-bottom:.9rem; border:1px solid rgba(255,255,255,.24); border-radius:6px;
-  color:#b9fff5; background:rgba(255,255,255,.06); font-size:.74rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
-.hero-title { margin:0; color:#fff!important; font-family:'Manrope',sans-serif; font-size:clamp(2rem,4vw,3.5rem); font-weight:800; line-height:1.04; letter-spacing:-.055em; }
-.hero-copy { max-width:730px; margin:1rem 0 1.2rem; color:#d8e9ed; font-size:1.02rem; line-height:1.75; }
-.hero-pills { display:flex; flex-wrap:wrap; gap:.5rem; }
-.hero-pill { padding:.45rem .65rem; border:1px solid rgba(255,255,255,.2); border-radius:8px; color:#effdfb; background:rgba(255,255,255,.07); font-size:.81rem; }
-.hero-side { min-height:175px; display:flex; flex-direction:column; justify-content:center; padding:1.15rem; border:1px solid rgba(255,255,255,.2); border-radius:18px; background:rgba(255,255,255,.075); backdrop-filter:blur(8px); }
-.hero-side-number { color:#9ff4e8; font-family:'Manrope',sans-serif; font-size:3.5rem; font-weight:800; line-height:1; }
-.hero-side-title { margin-top:.7rem; color:#fff; font-size:1rem; font-weight:800; }
-.hero-side-copy { margin-top:.3rem; color:#d3e9ec; font-size:.82rem; line-height:1.55; }
 
-/* Clear hierarchy, white surfaces, gentle motion rather than excessive gradients. */
-.section-kicker { margin:1.25rem 0 .3rem; color:var(--teal); font-size:.72rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
-.section-title { margin:0 0 .4rem; color:var(--ink); font-family:'Manrope',sans-serif; font-size:clamp(1.35rem,2.3vw,1.85rem); font-weight:800; letter-spacing:-.04em; }
-.section-copy { color:var(--ink-soft); line-height:1.7; }
-.surface-card { height:100%; padding:1.2rem 1.25rem; border:1px solid var(--line); border-radius:17px; background:#fff; box-shadow:0 5px 18px rgba(19,57,68,.035); animation:rise-in .45s ease both; }
-.search-panel { padding:1rem 1.1rem .7rem; border:1px solid #cce2e1; border-radius:18px; background:#fff; box-shadow:0 8px 24px rgba(19,57,68,.045); }
-.info-card { padding:1rem 1.1rem; border:1px solid var(--line); border-left:4px solid var(--teal); border-radius:12px; background:#fff; color:var(--ink); }
-.blue-card,.green-card,.grey-card { height:100%; padding:1.1rem; margin-bottom:.8rem; border-radius:14px; transition:transform .18s ease,box-shadow .18s ease; }
-.blue-card { border:1px solid #cbe6fa; border-left:4px solid var(--blue); background:var(--blue-bg); color:#164a6b; }
-.green-card { border:1px solid #ccebd8; border-left:4px solid var(--green); background:var(--green-bg); color:#18593d; }
-.grey-card { border:1px solid #dce4e8; border-left:4px solid var(--grey); background:var(--grey-bg); color:#384e59; }
-.blue-card:hover,.green-card:hover,.grey-card:hover { transform:translateY(-2px); box-shadow:0 9px 20px rgba(20,63,76,.07); }
-.pillar-title { display:flex; align-items:center; gap:.55rem; font-family:'Manrope',sans-serif; font-size:1.06rem; font-weight:800; }
-.pillar-dot { display:inline-block; width:.7rem; height:.7rem; border-radius:3px; }
-.pillar-blue { background:var(--blue); }.pillar-green { background:var(--green); }.pillar-grey { background:var(--grey); }
-.fact-label { margin-top:.7rem; color:var(--muted); font-size:.7rem; font-weight:800; text-transform:uppercase; letter-spacing:.1em; }
-.fact-value { color:var(--ink); font-size:.94rem; font-weight:700; line-height:1.45; }
-.mode-caption { display:flex; align-items:center; gap:.55rem; margin:.3rem 0 .8rem; color:#55717d; font-size:.87rem; }
-.mode-dot { width:.55rem; height:.55rem; border-radius:50%; background:#17a797; box-shadow:0 0 0 4px rgba(23,167,151,.12); }
-.sidebar-brand { margin:.25rem 0 1.4rem; padding:1rem; border:1px solid rgba(255,255,255,.14); border-radius:16px; background:rgba(255,255,255,.055); }
-.sidebar-brand-name { font-family:'Manrope',sans-serif; font-size:1.3rem; font-weight:800; letter-spacing:-.04em; color:#fff; }
-.sidebar-brand-sub { margin-top:.25rem; color:#c0e0e5; font-size:.78rem; }
-.sidebar-stat { display:flex; justify-content:space-between; align-items:center; gap:.7rem; margin:.65rem 0 .3rem; color:#e7fafb; font-size:.83rem; }
-.formula-card { height:100%; padding:1.15rem; border:1px solid var(--line); border-radius:14px; background:#fff; }
+def _prepare_static_assets() -> int:
+    """Ensure all water droplet frames are in static/waterdrop for zero-lag streaming."""
+    STATIC_WATERDROP.mkdir(parents=True, exist_ok=True)
+    if not WATERDROP_SRC.exists():
+        target_files = list(STATIC_WATERDROP.glob("*.jpg")) + list(STATIC_WATERDROP.glob("*.webp"))
+        return len(target_files) or 199
 
-[data-testid="stTextInputRootElement"] input,
-[data-testid="stNumberInputField"] input,
-[data-testid="stSelectbox"] [data-baseweb="select"],
-[data-testid="stTextArea"] textarea {
-  border-radius:10px!important;
-  border-color:#cfdede!important;
-  background:#fff!important;
-  color:#132c38!important;
-  -webkit-text-fill-color:#132c38!important;
-  opacity:1!important;
-}
-[data-testid="stTextInputRootElement"] input::placeholder,
-[data-testid="stTextArea"] textarea::placeholder {
-  color:#6e828b!important;
-  -webkit-text-fill-color:#6e828b!important;
-  opacity:1!important;
-}
-[data-testid="stWidgetLabel"],
-[data-testid="stWidgetLabel"] * {
-  color:#49616d!important;
-  -webkit-text-fill-color:#49616d!important;
-}
-[data-testid="stTextInputRootElement"] input:focus,
-[data-testid="stNumberInputField"] input:focus,
-[data-testid="stTextArea"] textarea:focus {
-  border-color:#078b91!important;
-  box-shadow:0 0 0 3px rgba(7,139,145,.12)!important;
-}
-button[data-testid="stBaseButton-primaryFormSubmit"],
-button[data-testid="stBaseButton-primary"],
-button[data-testid="stBaseButton-secondary"],
-div[data-testid="stDownloadButton"] button {
-  min-height:2.65rem;
-  border:1px solid #cbdcde!important;
-  border-radius:10px;
-  background:#e8f5f4!important;
-  color:#075b62!important;
-  -webkit-text-fill-color:#075b62!important;
-  font-weight:800;
-  transition:transform .17s ease,box-shadow .17s ease,background .17s ease;
-}
-button[data-testid="stBaseButton-primaryFormSubmit"],
-button[data-testid="stBaseButton-primary"] {
-  color:#fff!important;
-  -webkit-text-fill-color:#fff!important;
-  border:0!important;
-  background:#087e86!important;
-}
-button[data-testid="stBaseButton-primaryFormSubmit"]:hover,
-button[data-testid="stBaseButton-primary"]:hover {
-  color:#fff!important;
-  -webkit-text-fill-color:#fff!important;
-  background:#066871!important;
-  box-shadow:0 8px 19px rgba(7,99,108,.2);
-}
-button[data-testid="stBaseButton-secondary"]:hover,
-div[data-testid="stDownloadButton"] button:hover {
-  border-color:#078b91!important;
-  background:#d8eeeb!important;
-  color:#064b52!important;
-  -webkit-text-fill-color:#064b52!important;
-  box-shadow:0 6px 15px rgba(7,99,108,.12);
-}
-button[data-testid="stBaseButton-primary"]:disabled {
-  opacity:.72;
-  cursor:default;
-}
-[data-testid="stMetric"] { padding:1rem; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 4px 14px rgba(19,57,68,.025); transition:transform .18s ease,box-shadow .18s ease; }
-[data-testid="stMetric"]:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(19,57,68,.07); }
-[data-testid="stMetricLabel"] { color:#627984!important; font-weight:700; }
-[data-testid="stMetricValue"] { color:#123745!important; font-family:'Manrope',sans-serif; font-weight:800; }
-[data-testid="stTabs"] [data-baseweb="tab-list"] { gap:.35rem; border-bottom:1px solid var(--line); }
-[data-testid="stTabs"] button[data-baseweb="tab"] { padding:.65rem .85rem; border-radius:8px 8px 0 0; color:#607782; font-weight:800; }
-[data-testid="stTabs"] button[aria-selected="true"] { color:#087e86; background:#e7f7f5; }
-[data-testid="stFileUploader"] { padding:.6rem; border:1px dashed #a8c9cb; border-radius:13px; background:#f9fdfd; }
-[data-testid="stImage"] img { border-radius:13px; }
-[data-testid="stAlert"] { border-radius:12px; }
-[data-testid="stAlert"] [data-testid="stMarkdownContainer"],
-[data-testid="stAlert"] [data-testid="stMarkdownContainer"] * {
-  color:#000!important;
-  -webkit-text-fill-color:#000!important;
-}
-[data-testid="stExpander"] { border-color:var(--line)!important; border-radius:12px!important; background:#fff; }
-hr { border-color:var(--line); margin:1.5rem 0; }
-.stCaption,[data-testid="stCaptionContainer"] { color:#6e828b; }
-[data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-@keyframes rise-in { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-@keyframes ripple { from { transform:translate3d(0,0,0) scale(1); } to { transform:translate3d(-16px,12px,0) scale(1.04); } }
-@media(max-width:850px) { .hero-layout { grid-template-columns:1fr; } .hero-side { display:none; } .main-header { min-height:0; } }
-@media(max-width:720px) { .block-container { padding-top:.8rem; } .main-header { border-radius:18px; } .hero-copy { font-size:.94rem; } [data-testid="stMetric"] { padding:.7rem; } }
-@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; scroll-behavior:auto!important; } }
-</style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+    src_files = sorted(list(WATERDROP_SRC.glob("*.jpg")) + list(WATERDROP_SRC.glob("*.webp")))
+    if not src_files:
+        return 199
 
+    target_files = list(STATIC_WATERDROP.glob("*.jpg")) + list(STATIC_WATERDROP.glob("*.webp"))
+    if len(target_files) < len(src_files):
+        for f in src_files:
+            target = STATIC_WATERDROP / f.name
+            if not target.exists():
+                shutil.copy2(f, target)
+
+    return len(src_files) or 199
+
+
+TOTAL_FRAMES = _prepare_static_assets() or 199
 
 # -----------------------------------------------------------------------------
-# 2. Data/model initialization and small helpers
+# 3. Database Preparation & YOLO Vision API Server
 # -----------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Loading vision model…")
-def get_model():
-    """Load the YOLO model once per Streamlit server process."""
+water_db = load_water_data() or {}
+
+
+@st.cache_resource
+def get_cached_yolo_model():
     return load_yolo_model()
 
 
-@st.cache_data(show_spinner=False)
-def get_water_database():
-    """Cache water-footprint data separately from the heavyweight vision model."""
-    data = load_water_data()
-    return data or {}
-
-
-water_db = get_water_database()
-
-_SESSION_DEFAULTS = {
-    "app_mode": "manual",
-    "search_input": "",
-    "lookup_quantity": 1,
-    "submitted_search": "",
-    "submitted_quantity": 1,
-    "camera_active": False,
-    "_aqua_camera_capture": None,
-    "image_analysis_result": None,
-}
-for _key, _default in _SESSION_DEFAULTS.items():
-    if _key not in st.session_state:
-        st.session_state[_key] = _default
-
-
-def release_camera() -> None:
-    """Release an open camera before leaving the live camera view."""
-    cap = st.session_state.get("_aqua_camera_capture")
-    if cap is not None:
-        try:
-            cap.release()
-        except Exception:
-            pass
-    st.session_state["_aqua_camera_capture"] = None
-
-
-def set_mode(mode: str) -> None:
-    """Switch views and clean up camera resources when appropriate."""
-    previous_mode = st.session_state.get("app_mode", "manual")
-    if previous_mode == "camera" and mode != "camera":
-        release_camera()
-    if previous_mode != mode:
-        st.session_state["camera_active"] = False
-    st.session_state["app_mode"] = mode
-
-
-def start_camera() -> None:
-    st.session_state["camera_active"] = True
-
-
-def stop_camera() -> None:
-    st.session_state["camera_active"] = False
-    release_camera()
-
-
-def clear_search() -> None:
-    """Clear both the lookup field and the last submitted result."""
-    st.session_state["search_input"] = ""
-    st.session_state["lookup_quantity"] = 1
-    st.session_state["submitted_search"] = ""
-    st.session_state["submitted_quantity"] = 1
-
-
-def fmt_liters(value: float | int) -> str:
-    try:
-        return f"{float(value):,.0f} L"
-    except (TypeError, ValueError):
-        return "0 L"
-
-
-def percent(part: float, total: float) -> str:
-    return f"{(part / total * 100):.1f}%" if total else "0.0%"
+yolo_model = get_cached_yolo_model()
 
 
 def safe_water_value(item_data: dict[str, Any], key: str) -> float:
@@ -286,696 +92,1703 @@ def safe_water_value(item_data: dict[str, Any], key: str) -> float:
         return 0.0
 
 
-def has_component_breakdown(item_data: dict[str, Any]) -> bool:
-    return all(
-        isinstance(item_data.get(key), (int, float))
-        for key in ("blue", "green", "grey")
-    )
-
-
 def footprint_unit(item_data: dict[str, Any]) -> str:
     unit = item_data.get("unit", "item")
     return unit if isinstance(unit, str) and unit else "item"
 
 
-def display_footprint_analysis(query_name: str, item_data: dict[str, Any], quantity: int = 1) -> None:
-    """Render overview, component breakdown and everyday comparisons."""
-    total_l = safe_water_value(item_data, "total") * quantity
-    components_available = has_component_breakdown(item_data)
-    unit = footprint_unit(item_data)
-    blue_l = safe_water_value(item_data, "blue") * quantity if components_available else 0
-    green_l = safe_water_value(item_data, "green") * quantity if components_available else 0
-    grey_l = safe_water_value(item_data, "grey") * quantity if components_available else 0
-    safe_name = html.escape(query_name.strip().title())
-
-    st.markdown(
-        f'<div class="section-kicker">Your results</div>'
-        f'<h2 class="section-title">Water footprint for {safe_name}</h2>'
-        f'<p class="section-copy">Estimated footprint for <b>{quantity}</b> × '
-        f'<b>{html.escape(unit)}</b>. '
-        'Use the tabs below to explore the total, water types and everyday equivalents.</p>',
-        unsafe_allow_html=True,
-    )
-    if item_data.get("estimate_type") == "illustrative_generic":
-        st.warning(
-            item_data.get(
-                "estimate_note",
-                "This is a rough illustrative estimate, not an authoritative "
-                "product-specific measurement.",
-            )
-        )
-
-    tab_summary, tab_breakdown, tab_equivalents = st.tabs(
-        ["✦ Overview", "◉ Component breakdown", "↗ Everyday equivalents"]
-    )
-
-    with tab_summary:
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric(f"Total footprint · {unit}", fmt_liters(total_l))
-        if components_available:
-            m2.metric("Blue water", fmt_liters(blue_l), percent(blue_l, total_l))
-            m3.metric("Green water", fmt_liters(green_l), percent(green_l, total_l))
-            m4.metric("Grey water", fmt_liters(grey_l), percent(grey_l, total_l))
-        else:
-            m2.metric("Blue water", "Not available")
-            m3.metric("Green water", "Not available")
-            m4.metric("Grey water", "Not available")
-        st.markdown(
-            '<div class="surface-card" style="margin-top:1rem;">'
-            '<b>Reading this result</b><p style="margin:.45rem 0 0;color:#58717d;line-height:1.7;">'
-            'A water footprint estimates the freshwater consumed or polluted across a product’s '
-            'life cycle—not just the water used directly at home. Values depend on the underlying '
-            'database and the production context.</p></div>',
-            unsafe_allow_html=True,
-        )
-
-    with tab_breakdown:
-        col_text, col_chart = st.columns([1.05, 1], gap="large")
-        if components_available:
-            with col_text:
-                st.markdown("#### Where does the water go?")
-                st.markdown(
-                    f'<div class="blue-card"><b>Blue water · {fmt_liters(blue_l)}</b><br>'
-                    '<span>Fresh surface water and groundwater from rivers, lakes and aquifers, often used for irrigation or manufacturing.</span></div>'
-                    f'<div class="green-card"><b>Green water · {fmt_liters(green_l)}</b><br>'
-                    '<span>Rainwater held in soil and used by plants through growth and evapotranspiration.</span></div>'
-                    f'<div class="grey-card"><b>Grey water · {fmt_liters(grey_l)}</b><br>'
-                    '<span>An indicator of the freshwater volume needed to assimilate pollutants to applicable water-quality standards.</span></div>',
-                    unsafe_allow_html=True,
-                )
-            with col_chart:
-                st.markdown("#### Volumetric distribution")
-                chart_df = pd.DataFrame(
-                    {
-                        "Water component": ["Blue", "Green", "Grey"],
-                        "Liters": [blue_l, green_l, grey_l],
-                    }
-                )
-                st.bar_chart(chart_df, x="Water component", y="Liters", height=300)
-                st.caption("The chart uses the component values returned by your local footprint database.")
-        else:
-            with col_text:
-                st.info(
-                    "The source provides an aggregate footprint total only; "
-                    "blue, green, and grey component values are not available."
-                )
-            with col_chart:
-                st.markdown("#### Component distribution")
-                st.caption("No chart is shown because component-level values are unavailable.")
-
-    with tab_equivalents:
-        st.markdown("#### Put the footprint into perspective")
-        st.caption("Illustrative comparisons based on the assumptions shown below each metric.")
-        e1, e2, e3, e4 = st.columns(4)
-        e1.metric("10-minute showers", f"{total_l / 65:,.1f}")
-        e1.caption("Assumes 65 L per shower.")
-        e2.metric("Drinking-water days", f"{total_l / 3:,.0f}")
-        e2.caption("Assumes 3 L per person per day.")
-        e3.metric("Full bathtubs", f"{total_l / 150:,.1f}")
-        e3.caption("Assumes 150 L per tub.")
-        e4.metric("Toilet flushes", f"{total_l / 6:,.0f}")
-        e4.caption("Assumes 6 L per flush.")
+client_db: dict[str, Any] = {}
+for k, v in water_db.items():
+    if isinstance(v, dict):
+        client_db[k] = {
+            "name": str(k).title(),
+            "total": safe_water_value(v, "total"),
+            "blue": safe_water_value(v, "blue"),
+            "green": safe_water_value(v, "green"),
+            "grey": safe_water_value(v, "grey"),
+            "unit": footprint_unit(v),
+        }
+db_json = json.dumps(client_db)
 
 
-def render_detection_telemetry(detected_items: list[str], database: dict[str, Any]) -> None:
-    """Render recognized objects and their stored footprint estimates."""
-    matched_items = [item for item in detected_items if item in database]
-    if not matched_items:
-        st.warning("No database-matched objects were detected. Try an image with clearer, well-lit objects.")
-        return
-
-    total_image_water = sum(safe_water_value(database[item], "total") for item in matched_items)
-    st.metric("Estimated detected footprint", fmt_liters(total_image_water))
-    if any(
-        database[item].get("estimate_type") == "illustrative_generic"
-        for item in matched_items
-    ):
-        st.warning(
-            "Some detected-item values are rough illustrative estimates, not "
-            "authoritative product-specific measurements."
-        )
-    st.markdown(
-        '<div class="section-kicker">Recognized objects</div>',
-        unsafe_allow_html=True,
-    )
-    for item in matched_items:
-        data = database[item]
-        with st.container(border=True):
-            item_col, total_col = st.columns([2, 1])
-            item_col.markdown(f"**{html.escape(item.title())}**")
-            if has_component_breakdown(data):
-                item_col.caption(
-                    f"Blue {fmt_liters(safe_water_value(data, 'blue'))}  ·  "
-                    f"Green {fmt_liters(safe_water_value(data, 'green'))}  ·  "
-                    f"Grey {fmt_liters(safe_water_value(data, 'grey'))}"
-                )
-            else:
-                item_col.caption("Blue/green/grey split unavailable from the source.")
-            total_col.metric(
-                f"Per detected item · {footprint_unit(data)}",
-                fmt_liters(safe_water_value(data, "total")),
-            )
+class VisionServerState:
+    server: Any = None
+    lock = threading.Lock()
 
 
-# -----------------------------------------------------------------------------
-# 3. Sidebar: concise context and conservation guidance
-# -----------------------------------------------------------------------------
-with st.sidebar:
-    st.markdown(
-        '<div class="sidebar-brand">'
-        '<div style="font-size:1.65rem;margin-bottom:.2rem;">💧</div>'
-        '<div class="sidebar-brand-name">AquaTrace</div>'
-        '<div class="sidebar-brand-sub">Water footprint intelligence</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("### The invisible water story")
-    st.markdown(
-        "Much of a product’s water footprint is **embedded in its supply chain**—"
-        "from growing raw materials to manufacturing and transport."
-    )
-    st.markdown("---")
-    st.markdown("### Global footprint mix")
-    st.markdown('<div class="sidebar-stat"><span>Green water</span><b>74%</b></div>', unsafe_allow_html=True)
-    st.progress(0.74)
-    st.markdown('<div class="sidebar-stat"><span>Grey water</span><b>15%</b></div>', unsafe_allow_html=True)
-    st.progress(0.15)
-    st.markdown('<div class="sidebar-stat"><span>Blue water</span><b>11%</b></div>', unsafe_allow_html=True)
-    st.progress(0.11)
-    st.caption("Illustrative global shares from the source content; shares vary by methodology and dataset.")
-    st.markdown("---")
-    st.markdown("### Small choices, meaningful impact")
-    st.markdown(
-        "- **Keep products longer.** Extending product life can reduce demand for new manufacturing.\n"
-        "- **Reuse and repair.** Second-hand and refurbished goods can avoid some new-material demand.\n"
-        "- **Look beyond the tap.** Food, textiles and electronics can carry substantial embedded water."
-    )
-    st.markdown("---")
-    st.caption("Assessment context: ISO 14046 and Water Footprint Network concepts. Product values come from the app’s local database.")
+class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
+    def _send_cors(self, status=200, content_type="application/json"):
+        self.send_response(status)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Type", content_type)
+        self.end_headers()
 
+    def do_OPTIONS(self):
+        self._send_cors(200)
 
-# -----------------------------------------------------------------------------
-# 4. Hero header
-# -----------------------------------------------------------------------------
-st.markdown(
-    """
-    <div class="main-header">
-      <div class="hero-layout">
-        <div class="hero-content">
-          <div class="hero-eyebrow">AQUATRACE · WATER FOOTPRINT INTELLIGENCE</div>
-          <h1 class="hero-title">Every product has<br>a water story.</h1>
-          <p class="hero-copy">Explore the freshwater used, the rainwater consumed by plants, and the water-quality pressure associated with everyday goods. Search a product or use computer vision to make hidden water more visible.</p>
-          <div class="hero-pills">
-            <span class="hero-pill">Blue · Surface & groundwater</span>
-            <span class="hero-pill">Green · Rainwater in soil</span>
-            <span class="hero-pill">Grey · Pollution indicator</span>
-          </div>
-        </div>
-        <div class="hero-side">
-          <div class="hero-side-number">3</div>
-          <div class="hero-side-title">connected dimensions</div>
-          <div class="hero-side-copy">One footprint can describe water quantity, rainfall dependence and water-quality pressure.</div>
-        </div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    def _process_image_and_reply(self, frame):
+        try:
+            annotated_frame, detected_items = process_frame(frame, yolo_model, water_db)
+            _, buf = cv2.imencode(".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            annotated_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode("utf-8")
 
-st.markdown('<div class="section-kicker">Water footprint, explained</div>', unsafe_allow_html=True)
-st.markdown('<h2 class="section-title">More than the water you see</h2>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="section-copy">A <b>water footprint</b> estimates the freshwater consumed and the water pollution associated with producing the goods and services we use. It follows a product beyond the tap—through farming, raw materials, processing and manufacturing.</p>',
-    unsafe_allow_html=True,
-)
-intro_a, intro_b, intro_c = st.columns(3, gap="medium")
-with intro_a:
-    st.markdown(
-        '<div class="surface-card"><div class="fact-label">01 · Direct water</div>'
-        '<h3 style="margin:.45rem 0 .6rem;font-family:Manrope,sans-serif;">What you use</h3>'
-        '<p style="color:#49616d;line-height:1.7;margin:0;">Water used at home or work—for drinking, bathing, cleaning and cooking. This is visible, but it is only one part of the story.</p></div>',
-        unsafe_allow_html=True,
-    )
-with intro_b:
-    st.markdown(
-        '<div class="surface-card"><div class="fact-label">02 · Virtual water</div>'
-        '<h3 style="margin:.45rem 0 .6rem;font-family:Manrope,sans-serif;">What is embedded</h3>'
-        '<p style="color:#49616d;line-height:1.7;margin:0;">Water associated with growing food and fibres, extracting materials, making components and preparing products for sale.</p></div>',
-        unsafe_allow_html=True,
-    )
-with intro_c:
-    st.markdown(
-        '<div class="surface-card"><div class="fact-label">03 · Why it matters</div>'
-        '<h3 style="margin:.45rem 0 .6rem;font-family:Manrope,sans-serif;">Where & how</h3>'
-        '<p style="color:#49616d;line-height:1.7;margin:0;">A litre used in a water-stressed basin can have a different impact from a litre used where water is abundant. Production method and pollution also matter.</p></div>',
-        unsafe_allow_html=True,
-    )
+            items_out = []
+            total_water = 0.0
+            total_blue = 0.0
+            total_green = 0.0
+            total_grey = 0.0
+            for item in detected_items:
+                d = water_db.get(item, {})
+                tot = safe_water_value(d, "total")
+                b = safe_water_value(d, "blue")
+                g = safe_water_value(d, "green")
+                gy = safe_water_value(d, "grey")
+                u = footprint_unit(d)
+                total_water += tot
+                total_blue += b
+                total_green += g
+                total_grey += gy
+                items_out.append({
+                    "name": str(item).title(),
+                    "total": tot,
+                    "blue": b,
+                    "green": g,
+                    "grey": gy,
+                    "unit": u,
+                })
 
+            resp = {
+                "status": "ok",
+                "detected_count": len(detected_items),
+                "items": items_out,
+                "total_liters": round(total_water, 1),
+                "total_blue": round(total_blue, 1),
+                "total_green": round(total_green, 1),
+                "total_grey": round(total_grey, 1),
+                "showers": round(total_water / 65, 1) if total_water > 0 else 0,
+                "drinking_days": round(total_water / 3, 0) if total_water > 0 else 0,
+                "bathtubs": round(total_water / 150, 1) if total_water > 0 else 0,
+                "flushes": round(total_water / 6, 0) if total_water > 0 else 0,
+                "annotated_image": annotated_b64,
+            }
+            self._send_cors(200)
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
+        except Exception as e:
+            self._send_cors(500)
+            self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
 
-# 5. Instant lookup — analyze explicitly, retain results until cleared
-# -----------------------------------------------------------------------------
-st.markdown('<div class="section-kicker">Start with an item</div>', unsafe_allow_html=True)
-st.markdown('<h2 class="section-title">Calculate a product footprint</h2>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section-copy" style="margin-bottom:.8rem;">Search the local footprint database, choose a quantity, then press <b>Analyze footprint</b>. Results stay visible until you clear or submit another search.</div>',
-    unsafe_allow_html=True,
-)
-with st.container(border=True):
-    form_col, clear_col = st.columns([5.2, 1], vertical_alignment="bottom")
-    with form_col:
-        with st.form("footprint_lookup_form", clear_on_submit=False):
-            search_col, quantity_col, submit_col = st.columns([3.4, 1, 1.25], vertical_alignment="bottom")
-            with search_col:
-                search_query = st.text_input(
-                    "Product or everyday item",
-                    key="search_input",
-                    placeholder="Try coffee, cotton shirt, rice…",
-                    help="Names must be supported by your local water-footprint database.",
-                )
-            with quantity_col:
-                item_qty = st.number_input(
-                    "Quantity",
-                    min_value=1,
-                    max_value=100,
-                    step=1,
-                    key="lookup_quantity",
-                    help="Multiplies the estimate by the recorded unit, such as one item or one 100 g portion.",
-                )
-            with submit_col:
-                submit_lookup = st.form_submit_button("Analyze footprint", type="primary", use_container_width=True)
-    with clear_col:
-        st.button("Clear search", key="clear_lookup_button", on_click=clear_search, use_container_width=True)
-
-if submit_lookup:
-    st.session_state["submitted_search"] = search_query.strip().lower()
-    st.session_state["submitted_quantity"] = int(item_qty)
-
-active_search = st.session_state.get("submitted_search", "")
-active_quantity = int(st.session_state.get("submitted_quantity", 1))
-query_is_pending = bool(search_query.strip()) and search_query.strip().lower() != active_search
-if query_is_pending and active_search:
-    st.info("The search field has changed. The results below still show the last submitted item; press **Analyze footprint** to update them.")
-if active_search:
-    item_data = get_item_footprint(active_search)
-    if item_data:
-        display_footprint_analysis(active_search, item_data, active_quantity)
-    else:
-        st.warning(
-            f"**{html.escape(active_search.title())}** was not found in the local database. "
-            "Check the spelling or try another item supported by your dataset."
-        )
-        with st.expander("How to get a better match"):
-            st.markdown(
-                "- Try a shorter item name, such as `rice` instead of a full sentence.\n"
-                "- Use the product label/category expected by your dataset.\n"
-                "- Remember that this lookup only returns items present in the local database."
-            )
-elif query_is_pending:
-    st.info("Your text has not been analyzed yet. Press **Analyze footprint** to submit it.")
-else:
-    st.markdown(
-        '<div class="mode-caption"><span class="mode-dot"></span>Ready to explore — submit an item above or choose a detection mode below.</div>',
-        unsafe_allow_html=True,
-    )
-
-st.divider()
-
-
-# -----------------------------------------------------------------------------
-# 6. Detection mode picker
-# -----------------------------------------------------------------------------
-st.markdown('<div class="section-kicker">Choose your workflow</div>', unsafe_allow_html=True)
-st.markdown('<h2 class="section-title">Explore with three detection modes</h2>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="section-copy">Use a database lookup for a known item, computer vision for a photo, or your webcam for live scanning.</p>',
-    unsafe_allow_html=True,
-)
-
-mode_cols = st.columns(3, gap="medium")
-mode_options = [
-    ("manual", "⌕  Manual lookup", "Search and compare database estimates"),
-    ("image", "▧  Image scanner", "Analyze objects in a saved photo"),
-    ("camera", "◎  Live camera", "Scan a frame from the local webcam"),
-]
-for col, (mode_id, label, caption) in zip(mode_cols, mode_options):
-    with col:
-        active = st.session_state.app_mode == mode_id
-        with st.container(border=True):
-            st.markdown(
-                f'<div style="font-size:.76rem;letter-spacing:.1em;text-transform:uppercase;color:{"#087e8b" if active else "#7a929c"};font-weight:800;margin-bottom:.4rem;">'
-                f'{"● SELECTED MODE" if active else "DETECTION MODE"}</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(f"**{label}**")
-            st.caption(caption)
-            st.button(
-                "✓ Current mode" if active else "Open this mode →",
-                key=f"mode_{mode_id}",
-                type="primary" if active else "secondary",
-                use_container_width=True,
-                disabled=active,
-                on_click=set_mode,
-                args=(mode_id,),
-            )
-
-st.markdown(" ")
-
-
-# -----------------------------------------------------------------------------
-# 7. Mode: Manual search
-# -----------------------------------------------------------------------------
-if st.session_state.app_mode == "manual":
-    st.markdown('<div class="section-kicker">Mode 01</div>', unsafe_allow_html=True)
-    st.markdown('<h3 class="section-title">Manual object lookup</h3>', unsafe_allow_html=True)
-    guide_a, guide_b = st.columns([1.15, 1], gap="large")
-    with guide_a:
-        st.markdown(
-            '<div class="surface-card">'
-            '<h4 style="margin-top:0;">How to get a useful estimate</h4>'
-            '<p style="color:#58717d;line-height:1.75;">① Search for an item in the lookup above.<br>② Adjust the quantity to represent multiple units.<br>③ Review the blue, green and grey components to understand the type of water use.</p>'
-            '<p style="color:#58717d;line-height:1.75;margin-bottom:0;">The result is a database estimate, not a live measurement of water flowing from a tap.</p>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-    with guide_b:
-        st.markdown(
-            '<div class="surface-card" style="height:100%;background:linear-gradient(140deg,#e8fbf7,#f8fdfd);">'
-            '<div style="font-size:1.8rem;">🌱</div>'
-            '<h4 style="margin:.45rem 0;">A useful question to ask</h4>'
-            '<p style="color:#58717d;line-height:1.75;">“Which part of this product’s footprint is largest—and what choices might reduce it?”</p>'
-            '<span style="display:inline-block;background:#d3f5eb;color:#087e75;padding:.35rem .65rem;border-radius:999px;font-weight:700;font-size:.78rem;">Understand · Compare · Improve</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-
-# -----------------------------------------------------------------------------
-# 8. Mode: Image upload detection
-# -----------------------------------------------------------------------------
-elif st.session_state.app_mode == "image":
-    st.markdown('<div class="section-kicker">Mode 02</div>', unsafe_allow_html=True)
-    st.markdown('<h3 class="section-title">Analyze an image</h3>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="section-copy">Choose a clear photo. The vision model detects only its supported object classes that map to entries in your local water-footprint database; products without a matching model class cannot be recognized. People are excluded. Uploading alone does not run the analysis; use the button below.</p>',
-        unsafe_allow_html=True,
-    )
-    uploaded_file = st.file_uploader(
-        "Drop an image here or browse files",
-        type=["jpg", "jpeg", "png", "webp"],
-        key="uploaded_image_file",
-        help="Supported formats: JPG, JPEG, PNG and WEBP.",
-    )
-    uploaded_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
-    upload_digest = hashlib.sha256(uploaded_bytes).hexdigest() if uploaded_bytes else ""
-    analyze_col, tip_col = st.columns([1, 2], vertical_alignment="center")
-    with analyze_col:
-        analyze_image = st.button(
-            "Analyze image →",
-            key="analyze_image_button",
-            type="primary",
-            use_container_width=True,
-            disabled=not bool(uploaded_bytes),
-        )
-    with tip_col:
-        st.caption("Tip: good lighting, visible objects and minimal clutter generally improve detection quality.")
-
-    if analyze_image and uploaded_bytes:
-        bgr_image = cv2.imdecode(np.frombuffer(uploaded_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if bgr_image is None:
-            st.error("The image could not be decoded. Please try another JPG, PNG or WEBP file.")
-            st.session_state["image_analysis_result"] = None
-        else:
+    def do_POST(self):
+        if self.path == "/api/detect":
             try:
-                with st.spinner("Analyzing image and matching detected objects…"):
-                    vision_model = get_model()
-                    annotated_frame, detected_items = process_frame(bgr_image, vision_model, water_db)
-                annotated_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                st.session_state["image_analysis_result"] = {
-                    "digest": upload_digest,
-                    "annotated_rgb": annotated_rgb,
-                    "detected_items": list(detected_items or []),
-                }
-            except Exception as exc:
-                st.session_state["image_analysis_result"] = None
-                st.error("Image analysis did not complete. Verify that the YOLO model and database are configured correctly.")
-                with st.expander("Technical details"):
-                    st.code(str(exc))
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                payload = json.loads(body.decode("utf-8"))
+                img_data = payload.get("image", "")
+                if "," in img_data:
+                    _, img_data = img_data.split(",", 1)
+                img_bytes = base64.b64decode(img_data)
+                nparr = np.frombuffer(img_bytes, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    image_result = st.session_state.get("image_analysis_result")
-    if image_result and image_result.get("digest") == upload_digest and upload_digest:
-        img_col, impact_col = st.columns([1.3, 1], gap="large")
-        with img_col:
-            st.markdown("#### Detection preview")
-            st.image(image_result["annotated_rgb"], caption="Objects recognized by AquaTrace", use_container_width=True)
-        with impact_col:
-            st.markdown("#### Footprint telemetry")
-            render_detection_telemetry(image_result["detected_items"], water_db)
-    elif uploaded_file is not None:
-        st.info("Image selected. Press **Analyze image** to run object detection.")
-    else:
-        st.markdown(
-            '<div class="surface-card" style="text-align:center;padding:1.6rem;">'
-            '<div style="font-size:2rem;">▧</div><h4 style="margin:.5rem 0;">Your image workspace is ready</h4>'
-            '<p style="margin:0;color:#607782;">Upload a photo to begin. Analysis starts only when you choose to run it.</p></div>',
-            unsafe_allow_html=True,
-        )
+                if frame is None:
+                    self._send_cors(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": "Invalid image"}).encode("utf-8"))
+                    return
 
-
-# 9. Mode: Live camera detection
-# -----------------------------------------------------------------------------
-elif st.session_state.app_mode == "camera":
-    st.markdown('<div class="section-kicker">Mode 03</div>', unsafe_allow_html=True)
-    st.markdown('<h3 class="section-title">Live camera scanner</h3>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="section-copy">Start the scanner to analyze frames from the webcam attached to the machine running Streamlit. Detection is limited to supported model classes that map to the water-footprint database; people and unsupported products are excluded. This OpenCV webcam mode is intended for a local app; a cloud-hosted app generally needs a browser-streaming component such as streamlit-webrtc.</p>',
-        unsafe_allow_html=True,
-    )
-
-    button_col, status_col = st.columns([1, 2], vertical_alignment="center")
-    with button_col:
-        if st.session_state.get("camera_active", False):
-            st.button("■ Stop live scanner", key="stop_camera_button", on_click=stop_camera, use_container_width=True)
+                self._process_image_and_reply(frame)
+            except Exception as e:
+                self._send_cors(500)
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
         else:
-            st.button("▶ Start live scanner", key="start_camera_button", type="primary", on_click=start_camera, use_container_width=True)
-    with status_col:
-        if st.session_state.get("camera_active", False):
-            st.markdown('<div class="mode-caption"><span class="mode-dot"></span>Scanner active · frames are processed by the local application.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="mode-caption">◎ Scanner paused · press Start when you are ready.</div>', unsafe_allow_html=True)
+            self._send_cors(404)
 
-    if st.session_state.get("camera_active", False) and hasattr(st, "fragment"):
-        # Periodic fragments allow the Stop button outside the fragment to remain usable.
-        @st.fragment(run_every=0.35)
-        def live_camera_fragment():
-            if not st.session_state.get("camera_active", False):
-                release_camera()
-                return
-            frame_col, telemetry_col = st.columns([1.3, 1], gap="large")
-            cap = st.session_state.get("_aqua_camera_capture")
-            if cap is None or not cap.isOpened():
+    def do_GET(self):
+        if self.path == "/api/status":
+            self._send_cors(200)
+            self.wfile.write(json.dumps({"status": "active", "model": "yolo26n"}).encode("utf-8"))
+        elif self.path == "/api/capture_opencv":
+            try:
                 cap = cv2.VideoCapture(0)
-                st.session_state["_aqua_camera_capture"] = cap
-            if not cap.isOpened():
-                st.error("The webcam could not be opened. Check camera availability and OS permissions, then stop and start the scanner again.")
-                release_camera()
-                return
-            ok, frame = cap.read()
-            if not ok:
-                with frame_col:
-                    st.warning("Waiting for a camera frame…")
-                return
-            try:
-                annotated, items = process_frame(frame, get_model(), water_db)
-                with frame_col:
-                    st.markdown("#### Live preview")
-                    st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
-                with telemetry_col:
-                    st.markdown("#### Frame impact")
-                    render_detection_telemetry(items, water_db)
-            except Exception as exc:
-                st.error("Live frame analysis failed. Check the model and camera configuration.")
-                with st.expander("Technical details"):
-                    st.code(str(exc))
-        live_camera_fragment()
-    elif st.session_state.get("camera_active", False):
-        # Safe fallback for Streamlit versions without periodic fragments.
-        st.info("Your Streamlit version does not support periodic live fragments. Capture a browser-camera frame below to analyze a still image.")
-        captured = st.camera_input("Capture a frame to analyze", key="fallback_camera_capture")
-        captured_bytes = captured.getvalue() if captured is not None else b""
-        captured_digest = hashlib.sha256(captured_bytes).hexdigest() if captured_bytes else ""
-        if captured is not None:
-            analyze_captured_frame = st.button("Analyze captured frame", key="analyze_fallback_frame_button", type="primary")
-            # Streamlit buttons rerun the app; retain one-shot analysis based on the button result.
-            if analyze_captured_frame and captured_digest != st.session_state.get("fallback_camera_result_digest"):
-                frame = cv2.imdecode(np.frombuffer(captured_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    try:
-                        with st.spinner("Analyzing captured frame…"):
-                            annotated, items = process_frame(frame, get_model(), water_db)
-                        st.session_state["fallback_camera_result"] = {
-                            "digest": captured_digest,
-                            "annotated": cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
-                            "items": list(items or []),
-                        }
-                        st.session_state["fallback_camera_result_digest"] = captured_digest
-                    except Exception as exc:
-                        st.error("Camera frame analysis failed.")
-                        with st.expander("Technical details"):
-                            st.code(str(exc))
-            fallback_result = st.session_state.get("fallback_camera_result")
-            if fallback_result and fallback_result.get("digest") == captured_digest:
-                frame_col, telemetry_col = st.columns([1.3, 1], gap="large")
-                with frame_col:
-                    st.image(fallback_result["annotated"], caption="Captured frame analysis", use_container_width=True)
-                with telemetry_col:
-                    render_detection_telemetry(fallback_result["items"], water_db)
-    else:
-        release_camera()
-        st.markdown(
-            '<div class="surface-card" style="text-align:center;padding:2rem;">'
-            '<div style="font-size:2.2rem;">◎</div>'
-            '<h4 style="margin:.6rem 0;">The scanner is ready</h4>'
-            '<p style="color:#617985;margin:0;">Start the live scanner when your webcam is available. You can stop it at any time using the same control.</p>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+                if not cap.isOpened():
+                    self._send_cors(500)
+                    self.wfile.write(json.dumps({"status": "error", "message": "Cannot open webcam device 0"}).encode("utf-8"))
+                    return
+                ret, frame = cap.read()
+                cap.release()
+                if not ret or frame is None:
+                    self._send_cors(500)
+                    self.wfile.write(json.dumps({"status": "error", "message": "Failed to read camera frame"}).encode("utf-8"))
+                    return
+                self._process_image_and_reply(frame)
+            except Exception as e:
+                self._send_cors(500)
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode("utf-8"))
+        else:
+            self._send_cors(404)
+
+    def log_message(self, format, *args):
+        pass
 
 
-# 10. Educational hub
+def ensure_vision_server() -> None:
+    with VisionServerState.lock:
+        if VisionServerState.server is not None:
+            return
+        try:
+            class ReusableTCPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+                daemon_threads = True
+                allow_reuse_address = True
+
+            server = ReusableTCPServer(("127.0.0.1", 8502), VisionAPIHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            VisionServerState.server = server
+        except OSError:
+            pass
+
+
+ensure_vision_server()
+
 # -----------------------------------------------------------------------------
-st.divider()
-st.markdown('<div class="section-kicker">Learn the science</div>', unsafe_allow_html=True)
-st.markdown('<h2 class="section-title">Understand the water behind products</h2>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="section-copy">A water footprint is an indicator of freshwater use and pollution associated with a product, person, community or business, including supply-chain stages.</p>',
-    unsafe_allow_html=True,
-)
+# 4. Streamlit Global Chrome Reset for 100vw / 100vh Full-Bleed Display
+# -----------------------------------------------------------------------------
+ST_RESET_CSS = """
+<style>
+/* Remove default Streamlit top header bar, footer, and menu */
+[data-testid="stHeader"], footer, #MainMenu {
+    display: none !important;
+    height: 0 !important;
+    visibility: hidden !important;
+}
+.block-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100vw !important;
+    width: 100vw !important;
+    overflow: hidden !important;
+}
+iframe {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    border: none !important;
+    z-index: 999999 !important;
+    background: #040608 !important;
+}
+body, .stApp {
+    background-color: #040608 !important;
+    overflow: hidden !important;
+}
+</style>
+"""
+st.markdown(ST_RESET_CSS, unsafe_allow_html=True)
 
-edu_tab1, edu_tab2, edu_tab3, edu_tab4 = st.tabs(
-    ["🌊 The three water pillars", "∑ Calculation framework", "↗ Product life cycle", "✓ Interpret & reduce"]
-)
+# -----------------------------------------------------------------------------
+# 5. The Unified Scrollytelling Engine (HTML5 / Canvas / Glassmorphism)
+# -----------------------------------------------------------------------------
+UNIFIED_HTML = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AquaTrace · Unified Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {{
+    --bg-pure: #040608;
+    --bg-card: rgba(10, 16, 24, 0.85);
+    --bg-card-subtle: rgba(14, 22, 32, 0.7);
+    --border-subtle: rgba(255, 255, 255, 0.09);
+    --border-glow: rgba(34, 211, 238, 0.35);
+    --cyan-glow: #22d3ee;
+    --cyan-bright: #38bdf8;
+    --text-high: rgba(255, 255, 255, 0.95);
+    --text-mid: rgba(255, 255, 255, 0.65);
+    --text-low: rgba(255, 255, 255, 0.38);
+    --blue-brand: #38bdf8;
+    --green-brand: #34d399;
+    --grey-brand: #94a3b8;
+    --font-heading: 'Geist', -apple-system, sans-serif;
+    --font-body: 'Inter', -apple-system, sans-serif;
+}}
 
-with edu_tab1:
-    st.markdown(
-        '<p class="section-copy">The components describe different kinds of pressure. They should be read separately as well as together: blue is linked to surface and groundwater, green to rainfall stored in soil, and grey to pollution assimilation.</p>',
-        unsafe_allow_html=True,
-    )
-    c1, c2, c3 = st.columns(3, gap="medium")
-    with c1:
-        st.markdown(
-            '<div class="blue-card"><div class="pillar-title"><span class="pillar-dot pillar-blue"></span>Blue water</div>'
-            '<div class="fact-label">Source</div><div class="fact-value">Rivers, lakes, reservoirs and groundwater aquifers</div>'
-            '<div class="fact-label">What it measures</div><p>Fresh surface or groundwater consumed or incorporated during a process. Depending on the assessment, withdrawals and return flows also matter.</p>'
-            '<div class="fact-label">Common examples</div><p>Irrigation pumped from a river or aquifer; water consumed during industrial processing.</p>'
-            '<div class="fact-label">Why it matters</div><p style="margin-bottom:0;">A large blue footprint can be especially concerning where water is scarce or ecosystems depend on the same source.</p></div>',
-            unsafe_allow_html=True,
-        )
-    with c2:
-        st.markdown(
-            '<div class="green-card"><div class="pillar-title"><span class="pillar-dot pillar-green"></span>Green water</div>'
-            '<div class="fact-label">Source</div><div class="fact-value">Rainfall stored in the soil as moisture</div>'
-            '<div class="fact-label">What it measures</div><p>Rainwater used by plants and returned to the atmosphere through evaporation and transpiration, or incorporated into biomass.</p>'
-            '<div class="fact-label">Common examples</div><p>Rain-fed crops, pasture, timber and natural fibres grown using soil moisture.</p>'
-            '<div class="fact-label">Why it matters</div><p style="margin-bottom:0;">It connects production to rainfall, soil health, land use and climate variability—not just irrigation infrastructure.</p></div>',
-            unsafe_allow_html=True,
-        )
-    with c3:
-        st.markdown(
-            '<div class="grey-card"><div class="pillar-title"><span class="pillar-dot pillar-grey"></span>Grey water</div>'
-            '<div class="fact-label">Source</div><div class="fact-value">A calculated indicator of water-quality pressure</div>'
-            '<div class="fact-label">What it measures</div><p>The theoretical volume of freshwater needed to assimilate a pollutant load while meeting the relevant water-quality standard.</p>'
-            '<div class="fact-label">Common examples</div><p>Pollution associated with fertilizer runoff, pesticide residues, textile dyes or industrial effluents.</p>'
-            '<div class="fact-label">Why it matters</div><p style="margin-bottom:0;">It is not simply the amount of wastewater discharged, nor a literal tank of water consumed; it expresses a dilution/quality requirement.</p></div>',
-            unsafe_allow_html=True,
-        )
+* {{
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+}}
 
-    st.markdown("#### Compare the three components")
-    comparison = pd.DataFrame(
-        [
-            {"Component": "Blue", "Primary connection": "Surface water / groundwater", "Main lens": "Freshwater consumption and scarcity", "Illustrative example": "Irrigation from an aquifer"},
-            {"Component": "Green", "Primary connection": "Rainwater in soil", "Main lens": "Plant water use and rainfall", "Illustrative example": "Rain-fed cotton crop"},
-            {"Component": "Grey", "Primary connection": "Water quality", "Main lens": "Pollutant load and quality standards", "Illustrative example": "Fertilizer runoff"},
-        ]
-    )
-    st.dataframe(comparison, hide_index=True, use_container_width=True)
+html, body {{
+    background-color: var(--bg-pure);
+    color: var(--text-high);
+    font-family: var(--font-body);
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+}}
 
-with edu_tab2:
-    formula_left, formula_right = st.columns(2, gap="large")
-    with formula_left:
-        with st.container(border=True):
-            st.markdown("#### 1. Total footprint")
-            st.latex(r"WF_{\text{total}} = WF_{\text{blue}} + WF_{\text{green}} + WF_{\text{grey}}")
-            st.markdown("The total indicator combines the blue, green and grey components reported by the assessment.")
-        st.markdown('<div style="height:.8rem;"></div>', unsafe_allow_html=True)
-        with st.container(border=True):
-            st.markdown("#### 2. Blue and green water")
-            st.latex(r"WF_{\text{blue/green}} = \frac{CWU_{\text{blue/green}} + W_{\text{incorporated}}}{Y}")
-            st.caption("CWU = crop or process water use; Y = yield. The exact formulation depends on the assessment boundary and units.")
-    with formula_right:
-        with st.container(border=True):
-            st.markdown("#### 3. Grey water")
-            st.latex(r"WF_{\text{grey}} = \frac{L}{c_{\max} - c_{\text{nat}}}")
-            st.markdown("The pollutant load is divided by the allowable concentration difference between the standard and natural background level.")
-            st.latex(r"WF_{\text{grey}} = \frac{\alpha \times AR}{c_{\max} - c_{\text{nat}}}")
-            st.caption("α = leaching/runoff fraction; AR = chemical application or emission rate.")
+/* The Core Liquid Canvas */
+#water-canvas {{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    object-fit: cover;
+    z-index: 1;
+}}
 
-with edu_tab3:
-    st.markdown("#### Where hidden water can accumulate")
-    stages = [
-        ("01", "Raw materials & agriculture", "Crop cultivation, evapotranspiration, irrigation, extraction and agricultural runoff."),
-        ("02", "Processing & refining", "Washing, chemical treatment, smelting, polymerization and component fabrication."),
-        ("03", "Manufacturing & assembly", "Cooling, steam generation, cleaning, dyeing, finishing and wastewater management."),
-        ("04", "Packaging & distribution", "Packaging materials and the energy and logistics required to move products to consumers."),
-    ]
-    for number, title, description in stages:
-        with st.container(border=True):
-            number_col, text_col = st.columns([0.55, 5], vertical_alignment="center")
-            number_col.markdown(
-                f'<div style="display:grid;place-items:center;width:2.5rem;height:2.5rem;border-radius:13px;background:#d9f7f0;color:#087e8b;font-weight:800;">{number}</div>',
-                unsafe_allow_html=True,
-            )
-            text_col.markdown(f"**{title}**")
-            text_col.caption(description)
+/* Ambient Vignette & Atmosphere Layer */
+.vignette-overlay {{
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 50%, rgba(4, 6, 8, 0.6) 85%, var(--bg-pure) 100%);
+}}
 
-with edu_tab4:
-    action_left, action_right = st.columns(2, gap="large")
-    with action_left:
-        st.markdown("#### How to interpret a result")
-        with st.container(border=True):
-            st.markdown("**Compare like with like.**")
-            st.write("Check whether values are reported per item, per kilogram, per serving or across a full life cycle before comparing products.")
-            st.markdown("**Look at location and timing.**")
-            st.write("A footprint does not communicate local water scarcity by itself. The same volume can have different consequences depending on basin conditions and season.")
-            st.markdown("**Separate quantity from pollution.**")
-            st.write("A higher grey-water estimate signals a larger calculated pollution-assimilation requirement; it is not a direct measurement of the volume of wastewater discharged.")
-    with action_right:
-        st.markdown("#### Practical ways to reduce pressure")
-        with st.container(border=True):
-            st.markdown("**Avoid avoidable waste.**")
-            st.write("Food that is grown, processed and transported but never eaten carries a footprint without delivering its intended value.")
-            st.markdown("**Use products for longer.**")
-            st.write("Repairing, reusing, buying durable goods and considering refurbished options can reduce demand for new raw materials and manufacturing.")
-            st.markdown("**Ask how it was produced.**")
-            st.write("Efficient irrigation, soil stewardship, cleaner processing and wastewater treatment can influence different parts of the footprint.")
-    with st.expander("What can change a footprint estimate?"):
-        st.markdown(
-            "- **Geography and season:** rainfall, water stress and source-water conditions differ by place and time.\n"
-            "- **Production system:** rain-fed versus irrigated agriculture, crop yield, factory processes and energy systems affect results.\n"
-            "- **Assessment boundary:** studies may include different stages of the supply chain or report different functional units.\n"
-            "- **Database coverage:** AquaTrace can only return estimates supported by its local database; absent entries should not be treated as zero footprint."
-        )
+/* Luxury Top HUD Nav */
+.hud-nav {{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 100;
+    pointer-events: none;
+}}
 
-st.markdown(
-    '<div style="margin-top:1.8rem;padding:1rem 1.2rem;border-radius:16px;border:1px solid #dcebef;background:rgba(255,255,255,.7);color:#6b818b;font-size:.82rem;line-height:1.65;">'
-    '<b style="color:#34515f;">A note on interpretation</b><br>'
-    'Water-footprint numbers are estimates that depend on geography, production methods, database coverage and assessment boundaries. A grey-water estimate is a water-quality indicator, not a literal wastewater volume. Use results to compare and learn, not as a substitute for a documented life-cycle assessment.'
-    '</div>',
-    unsafe_allow_html=True,
-)
+.hud-nav * {{
+    pointer-events: auto;
+}}
 
-st.markdown(
-    '<div style="text-align:center;margin-top:1.6rem;color:#78909a;font-size:.78rem;">'
-    'AquaTrace · Make invisible water visible · Built for awareness and better decisions'
-    '</div>',
-    unsafe_allow_html=True,
-)
+.brand {{
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    text-decoration: none;
+    color: #fff;
+}}
+
+.brand-drop {{
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #67e8f9, #0284c7);
+    box-shadow: 0 0 16px rgba(34, 211, 238, 0.5);
+    display: grid;
+    place-items: center;
+    font-size: 0.95rem;
+}}
+
+.brand-name {{
+    font-family: var(--font-heading);
+    font-size: 1.15rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+}}
+
+.chapter-pills {{
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(10, 16, 24, 0.75);
+    padding: 0.3rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    backdrop-filter: blur(20px);
+}}
+
+.chapter-btn {{
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    background: transparent;
+    border: none;
+    color: var(--text-mid);
+    font-family: var(--font-heading);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}}
+
+.chapter-btn:hover, .chapter-btn.active {{
+    background: rgba(34, 211, 238, 0.16);
+    color: #fff;
+}}
+
+.hud-controls {{
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}}
+
+.btn-pill {{
+    padding: 0.4rem 0.9rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-high);
+    font-family: var(--font-heading);
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    backdrop-filter: blur(16px);
+    transition: all 0.2s ease;
+}}
+
+.btn-pill:hover {{
+    background: rgba(34, 211, 238, 0.18);
+    border-color: var(--cyan-glow);
+    color: #fff;
+}}
+
+/* ========================================================================= */
+/* SCROLLYTELLING STAGE: TOP HEADINGS & BOTTOM INTERACTIVE PANELS            */
+/* ========================================================================= */
+.story-stage {{
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 10;
+    pointer-events: none;
+}}
+
+/* TOP HEADINGS CONTAINER */
+.stage-top {{
+    position: absolute;
+    top: clamp(4.2rem, 8.5vh, 6.5rem);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(92vw, 980px);
+    text-align: center;
+    pointer-events: none;
+}}
+
+.top-heading-item {{
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.45s ease, transform 0.45s ease;
+    pointer-events: none;
+}}
+
+.top-heading-item.active {{
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}}
+
+.eyebrow-tag {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.75rem;
+    margin-bottom: 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-glow);
+    background: rgba(34, 211, 238, 0.08);
+    color: var(--cyan-glow);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    backdrop-filter: blur(16px);
+}}
+
+.main-title {{
+    font-family: var(--font-heading);
+    font-size: clamp(2rem, 4.2vw, 3.4rem);
+    font-weight: 900;
+    line-height: 1.08;
+    letter-spacing: -0.04em;
+    color: #fff;
+    margin-bottom: 0.4rem;
+}}
+
+.gradient-title {{
+    background: linear-gradient(135deg, #ffffff 35%, #7dd3fc 75%, #0284c7 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}}
+
+.sub-title {{
+    font-size: clamp(0.92rem, 1.15vw, 1.08rem);
+    color: var(--text-mid);
+    max-width: 680px;
+    margin: 0 auto;
+    line-height: 1.55;
+}}
+
+/* BOTTOM INTERACTIVE PANELS CONTAINER */
+.stage-bottom {{
+    position: absolute;
+    bottom: clamp(3.8rem, 7vh, 5.2rem);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(92vw, 860px);
+    pointer-events: none;
+}}
+
+.bottom-interactive-card {{
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%) translateY(32px);
+    width: 100%;
+    opacity: 0;
+    transition: opacity 0.45s ease, transform 0.45s ease;
+    pointer-events: none;
+}}
+
+.bottom-interactive-card.active {{
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+}}
+
+.glass-box {{
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 24px;
+    padding: 1.4rem 1.6rem;
+    backdrop-filter: blur(28px);
+    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.65), 0 0 40px rgba(34, 211, 238, 0.08);
+}}
+
+/* CHAPTER 1: QUICK AUDIT ITEMS GRID */
+.quick-audit-grid {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.65rem;
+    margin-top: 0.6rem;
+}}
+
+.audit-card {{
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 14px;
+    padding: 0.75rem 0.85rem;
+    text-align: center;
+}}
+
+.audit-icon {{ font-size: 1.25rem; margin-bottom: 0.2rem; }}
+.audit-name {{ font-size: 0.76rem; color: var(--text-mid); font-weight: 600; }}
+.audit-liters {{ font-family: var(--font-heading); font-size: 0.95rem; font-weight: 800; color: var(--cyan-glow); }}
+
+/* CHAPTER 2: THE 3 PILLARS */
+.pillars-row {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.8rem;
+}}
+
+.pillar-item {{
+    padding: 0.95rem 1.1rem;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.025);
+}}
+.p-blue {{ border-left: 4px solid var(--blue-brand); background: rgba(56, 189, 248, 0.05); }}
+.p-green {{ border-left: 4px solid var(--green-brand); background: rgba(52, 211, 153, 0.05); }}
+.p-grey {{ border-left: 4px solid var(--grey-brand); background: rgba(148, 163, 184, 0.05); }}
+
+.p-tag {{ font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.3rem; }}
+.p-title {{ font-family: var(--font-heading); font-size: 1.15rem; font-weight: 800; color: #fff; }}
+.p-desc {{ font-size: 0.75rem; color: var(--text-mid); margin-top: 0.35rem; line-height: 1.45; }}
+
+/* CHAPTER 3: LIVE PRODUCT CALCULATOR */
+.calc-search-row {{
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+}}
+
+.calc-input {{
+    flex: 1;
+    padding: 0.75rem 1.1rem;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #fff;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+}}
+.calc-input:focus {{ border-color: var(--cyan-glow); }}
+
+.qty-control {{
+    display: flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 0.15rem 0.4rem;
+}}
+
+.qty-btn {{
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 700;
+    cursor: pointer;
+    width: 28px;
+    height: 32px;
+}}
+
+.qty-val {{
+    font-family: var(--font-heading);
+    font-size: 0.92rem;
+    font-weight: 800;
+    color: var(--cyan-glow);
+    padding: 0 0.5rem;
+}}
+
+.calc-pills {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.8rem 0;
+}}
+
+.calc-pill {{
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.72rem;
+    color: var(--text-mid);
+    cursor: pointer;
+    transition: all 0.2s;
+}}
+.calc-pill:hover {{
+    background: rgba(34, 211, 238, 0.15);
+    border-color: var(--cyan-glow);
+    color: #fff;
+}}
+
+.calc-result-box {{
+    margin-top: 0.6rem;
+    padding: 0.85rem 1.1rem;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}}
+
+.equiv-grid {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    text-align: center;
+}}
+.equiv-item {{ font-size: 0.72rem; color: var(--text-mid); }}
+.equiv-val {{ font-family: var(--font-heading); font-size: 0.92rem; font-weight: 800; color: #fff; }}
+
+/* CHAPTER 4: COMPUTER VISION & LIVE CAMERA */
+.vision-grid {{
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 1rem;
+    align-items: center;
+}}
+
+.video-container {{
+    position: relative;
+    width: 100%;
+    height: 190px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #060a0f;
+    border: 1px solid rgba(34, 211, 238, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}}
+
+#webcam-stream {{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+}}
+
+.video-placeholder {{
+    text-align: center;
+    color: var(--text-mid);
+    font-size: 0.82rem;
+    padding: 1rem;
+}}
+
+.bounding-box-mock {{
+    position: absolute;
+    top: 25%;
+    left: 30%;
+    width: 40%;
+    height: 50%;
+    border: 2px dashed var(--cyan-glow);
+    border-radius: 8px;
+    box-shadow: 0 0 16px rgba(34, 211, 238, 0.4);
+    pointer-events: none;
+    display: none;
+    animation: box-pulse 2s infinite;
+}}
+
+@keyframes box-pulse {{
+    0%, 100% {{ border-color: var(--cyan-glow); }}
+    50% {{ border-color: #38bdf8; }}
+}}
+
+.vision-telemetry {{
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}}
+
+.vision-tag-pill {{
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0.8rem;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.8rem;
+}}
+
+/* CHAPTER 5: CONSERVATION STEWARDSHIP */
+.action-pillars {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.8rem;
+}}
+
+.action-card {{
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+}}
+.action-card b {{ color: var(--cyan-glow); font-size: 0.88rem; }}
+.action-card p {{ font-size: 0.75rem; color: var(--text-mid); margin-top: 0.3rem; line-height: 1.45; }}
+
+/* BOTTOM HUD: TIMELINE SCRUBBER */
+.hud-bottom {{
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    padding: 0.9rem 2.2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 100;
+    background: linear-gradient(to top, rgba(4, 6, 8, 0.92) 0%, transparent 100%);
+    pointer-events: none;
+}}
+
+.hud-bottom * {{
+    pointer-events: auto;
+}}
+
+.progress-track-wrap {{
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    width: 100%;
+    max-width: 480px;
+}}
+
+.progress-track {{
+    flex: 1;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+    position: relative;
+    cursor: pointer;
+    transition: height 0.2s ease;
+}}
+.progress-track:hover {{
+    height: 12px;
+}}
+
+.progress-fill {{
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #0284c7, #22d3ee);
+    border-radius: 999px;
+    pointer-events: none;
+}}
+
+.phase-tag {{
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    color: var(--cyan-glow);
+    text-transform: uppercase;
+}}
+
+/* PRELOADER */
+#preloader {{
+    position: fixed;
+    inset: 0;
+    background-color: var(--bg-pure);
+    z-index: 9999999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    transition: opacity 0.5s ease;
+}}
+#preloader.loaded {{ opacity: 0; pointer-events: none; }}
+
+@media (max-width: 768px) {{
+    .chapter-pills {{ display: none; }}
+    .quick-audit-grid {{ grid-template-columns: repeat(2, 1fr); }}
+    .pillars-row {{ grid-template-columns: 1fr; }}
+    .vision-grid {{ grid-template-columns: 1fr; }}
+    .action-pillars {{ grid-template-columns: 1fr; }}
+    .equiv-grid {{ grid-template-columns: repeat(2, 1fr); }}
+}}
+</style>
+</head>
+<body>
+
+<!-- Preloader -->
+<div id="preloader">
+    <div style="font-family:var(--font-heading); font-size:1.25rem; font-weight:800; color:var(--cyan-glow);">💧 SYNTHESIZING CANVAS</div>
+    <div id="loader-count" style="font-size:0.85rem; color:var(--text-mid);">Buffering 199 high-res frames...</div>
+</div>
+
+<!-- Liquid Canvas -->
+<canvas id="water-canvas"></canvas>
+<div class="vignette-overlay"></div>
+
+<!-- Top HUD Navigation -->
+<nav class="hud-nav">
+    <a href="#" class="brand">
+        <div class="brand-drop">💧</div>
+        <span class="brand-name">AQUATRACE</span>
+    </a>
+
+    <div class="chapter-pills">
+        <button class="chapter-btn active" data-progress="0.0">1. Story</button>
+        <button class="chapter-btn" data-progress="0.28">2. Science</button>
+        <button class="chapter-btn" data-progress="0.52">3. Calculator</button>
+        <button class="chapter-btn" data-progress="0.75">4. Vision AI</button>
+        <button class="chapter-btn" data-progress="0.95">5. Action</button>
+    </div>
+
+    <div class="hud-controls">
+        <span id="frame-counter" style="font-size:0.75rem; color:var(--text-mid); font-family:var(--font-heading); margin-right:0.3rem;">Frame 001 / {TOTAL_FRAMES:03d}</span>
+        <button class="btn-pill" id="play-btn">▶ Auto Play</button>
+    </div>
+</nav>
+
+<!-- Scrollytelling Stage -->
+<main class="story-stage">
+
+    <!-- =================================================================== -->
+    <!-- TOP HEADINGS: Fades in at the TOP as user scrolls                   -->
+    <!-- =================================================================== -->
+    <div class="stage-top">
+        <!-- Heading 1: Story -->
+        <div id="top-0" class="top-heading-item active">
+            <div class="eyebrow-tag"><span>✧</span><span>Virtual Water Intelligence</span></div>
+            <h1 class="main-title"><span class="gradient-title">Every Product Has<br>A Water Story</span></h1>
+            <p class="sub-title">Unmask the invisible freshwater consumed across global agriculture, manufacturing, and transport. Scroll to decompose the droplet.</p>
+        </div>
+
+        <!-- Heading 2: Science -->
+        <div id="top-1" class="top-heading-item">
+            <div class="eyebrow-tag"><span>ACT 2 · HYDROLOGICAL SCIENCE</span></div>
+            <h2 class="main-title"><span class="gradient-title">The Three Hydrological Pillars</span></h2>
+            <p class="sub-title">Water use is not monolithic. ISO 14046 & WFN quantify embedded water into three distinct environmental pressure categories.</p>
+        </div>
+
+        <!-- Heading 3: Calculator -->
+        <div id="top-2" class="top-heading-item">
+            <div class="eyebrow-tag"><span>ACT 3 · CONSUMER AUDITING</span></div>
+            <h2 class="main-title"><span class="gradient-title">Product Footprint Calculator</span></h2>
+            <p class="sub-title">Search our verified product catalog, adjust the quantity, and audit the cumulative supply chain freshwater impact.</p>
+        </div>
+
+        <!-- Heading 4: Vision AI -->
+        <div id="top-3" class="top-heading-item">
+            <div class="eyebrow-tag"><span>ACT 4 · COMPUTER VISION TELEMETRY</span></div>
+            <h2 class="main-title"><span class="gradient-title">AI Object & Live Camera Scanner</span></h2>
+            <p class="sub-title">Point your camera or upload a photo. Our Ultralytics YOLO vision model detects goods and extracts embedded water telemetry.</p>
+        </div>
+
+        <!-- Heading 5: Action -->
+        <div id="top-4" class="top-heading-item">
+            <div class="eyebrow-tag"><span>ACT 5 · CONSERVATION STEWARDSHIP</span></div>
+            <h2 class="main-title"><span class="gradient-title">Preserve the Freshwater Commons</span></h2>
+            <p class="sub-title">Awareness precedes preservation. Extend product lifespans, eliminate food waste, and support water-responsible supply chains.</p>
+        </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- BOTTOM INTERACTIVE COMPONENTS: Fades in at BOTTOM as user scrolls   -->
+    <!-- =================================================================== -->
+    <div class="stage-bottom">
+
+        <!-- Bottom 1: Quick Audit Cards (Story) -->
+        <div id="bottom-0" class="bottom-interactive-card active">
+            <div class="glass-box">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                    <span style="font-size:0.75rem; font-weight:800; letter-spacing:0.1em; color:var(--cyan-glow); text-transform:uppercase;">Everyday Virtual Water Averages</span>
+                    <span style="font-size:0.75rem; color:var(--text-low);">Scroll down to analyze</span>
+                </div>
+                <div class="quick-audit-grid">
+                    <div class="audit-card">
+                        <div class="audit-icon">☕</div>
+                        <div class="audit-name">Coffee (125 ml)</div>
+                        <div class="audit-liters">140 L</div>
+                    </div>
+                    <div class="audit-card">
+                        <div class="audit-icon">👕</div>
+                        <div class="audit-name">Cotton T-Shirt</div>
+                        <div class="audit-liters">2,500 L</div>
+                    </div>
+                    <div class="audit-card">
+                        <div class="audit-icon">📱</div>
+                        <div class="audit-name">Smartphone</div>
+                        <div class="audit-liters">12,760 L</div>
+                    </div>
+                    <div class="audit-card">
+                        <div class="audit-icon">👖</div>
+                        <div class="audit-name">Denim Jeans</div>
+                        <div class="audit-liters">8,000 L</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom 2: 3 Pillars Science Cards -->
+        <div id="bottom-1" class="bottom-interactive-card">
+            <div class="glass-box">
+                <div class="pillars-row">
+                    <div class="pillar-item p-blue">
+                        <div class="p-tag" style="color:var(--blue-brand);">Blue Water</div>
+                        <div class="p-title">Surface & Aquifers</div>
+                        <div class="p-desc">Fresh surface & groundwater consumed. High regional scarcity impact.</div>
+                    </div>
+                    <div class="pillar-item p-green">
+                        <div class="p-tag" style="color:var(--green-brand);">Green Water</div>
+                        <div class="p-title">Rainfall in Soil</div>
+                        <div class="p-desc">Rainwater evaporated during crop growth. Relies on soil moisture.</div>
+                    </div>
+                    <div class="pillar-item p-grey">
+                        <div class="p-tag" style="color:var(--grey-brand);">Grey Water</div>
+                        <div class="p-title">Pollution Dilution</div>
+                        <div class="p-desc">Theoretical freshwater needed to assimilate runoff to ambient standards.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom 3: Live Interactive Product Calculator -->
+        <div id="bottom-2" class="bottom-interactive-card">
+            <div class="glass-box">
+                <div class="calc-search-row">
+                    <input type="text" id="calc-input" class="calc-input" placeholder="Type a product (coffee, shirt, jeans, phone, beef, rice, apple, laptop)..." autocomplete="off">
+                    <div class="qty-control">
+                        <button class="qty-btn" id="qty-minus">−</button>
+                        <span class="qty-val" id="qty-display">1x</span>
+                        <button class="qty-btn" id="qty-plus">+</button>
+                    </div>
+                </div>
+                <div class="calc-pills">
+                    <span class="calc-pill" data-q="coffee">☕ Coffee</span>
+                    <span class="calc-pill" data-q="t-shirt">👕 T-Shirt</span>
+                    <span class="calc-pill" data-q="jeans">👖 Jeans</span>
+                    <span class="calc-pill" data-q="phone">📱 Smartphone</span>
+                    <span class="calc-pill" data-q="plastic bottle">🧴 Bottle</span>
+                    <span class="calc-pill" data-q="beef">🥩 Beef (1kg)</span>
+                    <span class="calc-pill" data-q="chocolate">🍫 Chocolate</span>
+                    <span class="calc-pill" data-q="rice">🍚 Rice (1kg)</span>
+                </div>
+                <div id="calc-result" class="calc-result-box">
+                    <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                        <div>
+                            <span id="c-name" style="font-family:var(--font-heading); font-size:1.1rem; font-weight:800; color:#fff;">Single Cup of Coffee</span>
+                            <span id="c-unit" style="font-size:0.75rem; color:var(--text-mid); margin-left:0.5rem;">(125 ml)</span>
+                        </div>
+                        <span id="c-total" style="font-family:var(--font-heading); font-size:1.45rem; font-weight:900; color:var(--cyan-glow);">140 L</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:0.5rem; margin-top:0.6rem; text-align:center;">
+                        <div style="background:rgba(56,189,248,0.1); padding:0.4rem; border-radius:8px;">
+                            <span style="font-size:0.62rem; color:var(--blue-brand); font-weight:700;">BLUE</span>
+                            <div id="c-blue" style="font-size:0.88rem; font-weight:800;">7 L</div>
+                        </div>
+                        <div style="background:rgba(52,211,153,0.1); padding:0.4rem; border-radius:8px;">
+                            <span style="font-size:0.62rem; color:var(--green-brand); font-weight:700;">GREEN</span>
+                            <div id="c-green" style="font-size:0.88rem; font-weight:800;">130 L</div>
+                        </div>
+                        <div style="background:rgba(148,163,184,0.1); padding:0.4rem; border-radius:8px;">
+                            <span style="font-size:0.62rem; color:var(--grey-brand); font-weight:700;">GREY</span>
+                            <div id="c-grey" style="font-size:0.88rem; font-weight:800;">3 L</div>
+                        </div>
+                    </div>
+                    <div class="equiv-grid">
+                        <div class="equiv-item">Showers<div class="equiv-val" id="eq-showers">2.2</div></div>
+                        <div class="equiv-item">Drinking Days<div class="equiv-val" id="eq-drink">47</div></div>
+                        <div class="equiv-item">Bathtubs<div class="equiv-val" id="eq-tubs">0.9</div></div>
+                        <div class="equiv-item">Flushes<div class="equiv-val" id="eq-flush">23</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom 4: YOLO26N Computer Vision & Live Webcam Panel -->
+        <div id="bottom-3" class="bottom-interactive-card">
+            <div class="glass-box">
+                <div class="vision-grid">
+                    <div class="video-container" id="video-box" style="position:relative; overflow:hidden;">
+                        <video id="webcam-stream" autoplay playsinline muted></video>
+                        <img id="annotated-stream" style="width:100%; height:100%; object-fit:cover; position:absolute; top:0; left:0; display:none; border-radius:10px; z-index:2;" alt="YOLO Detection Overlay">
+                        <div class="bounding-box-mock" id="box-mock"></div>
+                        <div class="video-placeholder" id="video-ph">
+                            <div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div>
+                            <div style="font-weight:700; color:#fff;">Live YOLO26n Vision Scanner</div>
+                            <div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Point camera at items (phone, bottle, cup, laptop, apple, book)</div>
+                        </div>
+                    </div>
+                    <div class="vision-telemetry">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.72rem; font-weight:800; color:var(--cyan-glow); letter-spacing:0.1em; text-transform:uppercase;">YOLO26N Vision Engine</span>
+                            <span id="cam-status" style="font-size:0.68rem; color:var(--text-low);">● Offline</span>
+                        </div>
+                        <div class="vision-tag-pill" style="min-height:2.2rem; align-items:center; display:flex; justify-content:space-between;">
+                            <span style="color:var(--text-mid); font-size:0.75rem;">Detected:</span>
+                            <div id="v-object" style="display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end;">
+                                <span style="color:var(--text-low); font-style:italic; font-size:0.75rem;">None</span>
+                            </div>
+                        </div>
+                        <div class="vision-tag-pill" style="display:flex; justify-content:space-between; align-items:baseline;">
+                            <span style="color:var(--text-mid); font-size:0.75rem;">Water Footprint:</span>
+                            <b id="v-footprint" style="color:var(--cyan-glow); font-size:1.15rem; font-family:var(--font-heading);">0 Liters</b>
+                        </div>
+                        <div id="v-breakdown" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; text-align:center; font-size:0.68rem; margin-top:1px;">
+                            <div style="background:rgba(56,189,248,0.08); padding:3px; border-radius:6px; color:var(--blue-brand);">Blue: <span id="v-blue">0L</span></div>
+                            <div style="background:rgba(52,211,153,0.08); padding:3px; border-radius:6px; color:var(--green-brand);">Green: <span id="v-green">0L</span></div>
+                            <div style="background:rgba(148,163,184,0.08); padding:3px; border-radius:6px; color:var(--grey-brand);">Grey: <span id="v-grey">0L</span></div>
+                        </div>
+                        <div id="v-equiv" style="font-size:0.68rem; color:var(--text-mid); text-align:center; padding:3px 6px; background:rgba(255,255,255,0.02); border-radius:6px; margin-top:2px;">
+                            Equivalents: <span id="v-showers">0</span> showers · <span id="v-days">0</span> drinking days
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+                            <button class="btn-pill" id="toggle-cam-btn" style="padding:0.55rem; background:linear-gradient(135deg, #0284c7, #22d3ee); color:#fff; border:none; font-weight:700; font-size:0.78rem;">
+                                ▶ Live Webcam
+                            </button>
+                            <button class="btn-pill" id="opencv-scan-btn" style="padding:0.55rem; background:rgba(255,255,255,0.07); color:#fff; border:1px solid rgba(255,255,255,0.15); font-weight:700; font-size:0.78rem;">
+                                📸 OpenCV Scan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom 5: Action & Reduction Plan -->
+        <div id="bottom-4" class="bottom-interactive-card">
+            <div class="glass-box">
+                <div class="action-pillars">
+                    <div class="action-card">
+                        <b>1. Extend Garment Life</b>
+                        <p>Wearing a shirt for 50 washes instead of 10 cuts its embedded water footprint by 80%.</p>
+                    </div>
+                    <div class="action-card">
+                        <b>2. Zero Food Waste</b>
+                        <p>Discarded food carries full blue and green irrigation costs with zero nutritional return.</p>
+                    </div>
+                    <div class="action-card">
+                        <b>3. Refurbished Tech</b>
+                        <p>Refurbished smartphones avoid the 12,760 L wafer-smelting fabrication footprint.</p>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:center; gap:0.8rem; margin-top:1rem;">
+                    <button class="btn-pill" id="restart-tour-btn">↺ Restart Experience</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</main>
+
+<!-- Bottom HUD: Timeline Scrubber -->
+<footer class="hud-bottom">
+    <div class="progress-track-wrap">
+        <span id="percent-label" style="font-size:0.8rem; font-weight:800; color:var(--cyan-glow); min-width:38px;">0%</span>
+        <div class="progress-track" id="progress-track-interactive" title="Click or drag anywhere to scrub the timeline">
+            <div id="progress-fill" class="progress-fill"></div>
+        </div>
+    </div>
+    <div id="phase-tag" class="phase-tag">ACT 1 · INCEPTION</div>
+</footer>
+
+<script>
+(function() {{
+    const TOTAL_FRAMES = {TOTAL_FRAMES};
+    const canvas = document.getElementById('water-canvas');
+    const ctx = canvas.getContext('2d', {{ alpha: false }});
+    const preloader = document.getElementById('preloader');
+    const loaderCount = document.getElementById('loader-count');
+    const frameCounter = document.getElementById('frame-counter');
+    const percentLabel = document.getElementById('percent-label');
+    const progressFill = document.getElementById('progress-fill');
+    const phaseTag = document.getElementById('phase-tag');
+    const playBtn = document.getElementById('play-btn');
+
+    const topHeadings = [
+        document.getElementById('top-0'),
+        document.getElementById('top-1'),
+        document.getElementById('top-2'),
+        document.getElementById('top-3'),
+        document.getElementById('top-4')
+    ];
+
+    const bottomPanels = [
+        document.getElementById('bottom-0'),
+        document.getElementById('bottom-1'),
+        document.getElementById('bottom-2'),
+        document.getElementById('bottom-3'),
+        document.getElementById('bottom-4')
+    ];
+
+    const chapterBtns = document.querySelectorAll('.chapter-btn');
+
+    const images = new Array(TOTAL_FRAMES);
+    let loadedCount = 0;
+    let isReady = false;
+    let targetProgress = 0;
+    let currentProgress = 0;
+    const LERP = 0.088;
+    let isPlaying = false;
+    let playDirection = 1;
+
+    // Static asset candidate paths
+    const baseCandidates = [
+        '/app/static/waterdrop/',
+        './app/static/waterdrop/',
+        '/static/waterdrop/',
+        './static/waterdrop/',
+        'waterdrop/'
+    ];
+    let detectedBase = baseCandidates[0];
+
+    function formatFrameName(idx) {{
+        const num = String(idx + 1).padStart(3, '0');
+        return `ezgif-frame-${{num}}.jpg`;
+    }}
+
+    // High-DPI Pixel-Perfect Canvas Sizing (Edge-to-Edge)
+    function resizeCanvas() {{
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.round(window.innerWidth * dpr);
+        canvas.height = Math.round(window.innerHeight * dpr);
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        if (isReady) {{
+            const fIdx = Math.min(TOTAL_FRAMES - 1, Math.max(0, Math.round(currentProgress * (TOTAL_FRAMES - 1))));
+            drawCanvasFrame(fIdx);
+        }}
+    }}
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function drawCanvasFrame(index) {{
+        let img = images[index];
+        // Nearest loaded frame fallback to guarantee zero flicker
+        if (!img || !img.complete || img.naturalWidth === 0) {{
+            for (let i = 1; i <= 40; i++) {{
+                if (images[index - i] && images[index - i].complete && images[index - i].naturalWidth > 0) {{
+                    img = images[index - i];
+                    break;
+                }}
+                if (images[index + i] && images[index + i].complete && images[index + i].naturalWidth > 0) {{
+                    img = images[index + i];
+                    break;
+                }}
+            }}
+        }}
+        if (!img || !img.complete || img.naturalWidth === 0) return;
+
+        ctx.fillStyle = '#040608';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Edge-to-edge cover math
+        const scale = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+        const nw = img.naturalWidth * scale;
+        const nh = img.naturalHeight * scale;
+        const cx = (canvas.width - nw) / 2;
+        const cy = (canvas.height - nh) / 2;
+        ctx.drawImage(img, cx, cy, nw, nh);
+    }}
+
+    // Image Preloader Sequence with Safety Unlocking
+    function preloadImageSequence() {{
+        let resolved = false;
+        const tryBase = (idx) => {{
+            if (idx >= baseCandidates.length) {{
+                initBatchLoad(baseCandidates[0]);
+                return;
+            }}
+            const testImg = new Image();
+            testImg.onload = () => {{
+                if (!resolved) {{
+                    resolved = true;
+                    detectedBase = baseCandidates[idx];
+                    initBatchLoad(detectedBase);
+                }}
+            }};
+            testImg.onerror = () => tryBase(idx + 1);
+            testImg.src = baseCandidates[idx] + formatFrameName(0);
+        }};
+        tryBase(0);
+    }}
+
+    function initBatchLoad(base) {{
+        for (let i = 0; i < TOTAL_FRAMES; i++) {{
+            const img = new Image();
+            img.src = base + formatFrameName(i);
+            img.onload = () => {{
+                onSingleFrame();
+                if (i === 0) drawCanvasFrame(0);
+            }};
+            img.onerror = () => onSingleFrame();
+            images[i] = img;
+        }}
+    }}
+
+    function onSingleFrame() {{
+        loadedCount++;
+        loaderCount.textContent = `Buffering ${{loadedCount}} of ${{TOTAL_FRAMES}} frames`;
+        if (loadedCount >= TOTAL_FRAMES) {{
+            finishLoading();
+        }}
+    }}
+
+    function finishLoading() {{
+        if (isReady) return;
+        isReady = true;
+        preloader.classList.add('loaded');
+        resizeCanvas();
+        renderLoop();
+    }}
+
+    // Safety timeout: unlock within 1.2s
+    setTimeout(finishLoading, 1200);
+
+    // =========================================================================
+    // MULTI-SOURCE SCROLL SYNCHRONIZATION
+    // =========================================================================
+    function setProgress(p) {{
+        targetProgress = Math.min(1, Math.max(0, p));
+    }}
+
+    function handleWheel(deltaY) {{
+        if (isPlaying) isPlaying = false;
+        playBtn.innerHTML = '▶ Auto Play';
+        const factor = Math.abs(deltaY) > 80 ? 0.00035 : 0.0008;
+        setProgress(targetProgress + deltaY * factor);
+    }}
+
+    window.addEventListener('wheel', (e) => handleWheel(e.deltaY), {{ passive: true }});
+
+    try {{
+        if (window.parent && window.parent !== window) {{
+            window.parent.addEventListener('wheel', (e) => handleWheel(e.deltaY), {{ passive: true }});
+            window.parent.addEventListener('scroll', () => {{
+                const pDoc = window.parent.document.documentElement;
+                const max = pDoc.scrollHeight - window.parent.innerHeight;
+                if (max > 25) setProgress(window.parent.scrollY / max);
+            }}, {{ passive: true }});
+        }}
+    }} catch (err) {{}}
+
+    // Mobile / Touchscreen Drag
+    let touchY = null;
+    window.addEventListener('touchstart', (e) => {{
+        if (e.touches.length > 0) touchY = e.touches[0].clientY;
+    }}, {{ passive: true }});
+    window.addEventListener('touchmove', (e) => {{
+        if (touchY !== null && e.touches.length > 0) {{
+            const dy = touchY - e.touches[0].clientY;
+            touchY = e.touches[0].clientY;
+            setProgress(targetProgress + dy * 0.0022);
+        }}
+    }}, {{ passive: true }});
+    window.addEventListener('touchend', () => {{ touchY = null; }});
+
+    // Keyboard Arrow Keys
+    window.addEventListener('keydown', (e) => {{
+        if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {{
+            setProgress(targetProgress + 0.05);
+        }} else if (e.key === 'ArrowUp' || e.key === 'PageUp') {{
+            setProgress(targetProgress - 0.05);
+        }}
+    }});
+
+    // Timeline Scrubber Click & Drag
+    const progressTrack = document.getElementById('progress-track-interactive');
+    let isScrubbing = false;
+
+    function scrubFromEvent(e) {{
+        if (!progressTrack) return;
+        const rect = progressTrack.getBoundingClientRect();
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : undefined);
+        if (clientX !== undefined) {{
+            const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+            setProgress(x / rect.width);
+        }}
+    }}
+
+    progressTrack.addEventListener('mousedown', (e) => {{ isScrubbing = true; scrubFromEvent(e); }});
+    window.addEventListener('mousemove', (e) => {{ if (isScrubbing) scrubFromEvent(e); }});
+    window.addEventListener('mouseup', () => {{ isScrubbing = false; }});
+    progressTrack.addEventListener('touchstart', (e) => {{ isScrubbing = true; scrubFromEvent(e); }}, {{ passive: true }});
+    window.addEventListener('touchmove', (e) => {{ if (isScrubbing) scrubFromEvent(e); }}, {{ passive: true }});
+    window.addEventListener('touchend', () => {{ isScrubbing = false; }});
+
+    // Chapter Navigation Pills
+    chapterBtns.forEach(btn => {{
+        btn.addEventListener('click', () => {{
+            const p = parseFloat(btn.getAttribute('data-progress'));
+            setProgress(p);
+        }});
+    }});
+
+    // Auto-Play Toggle
+    playBtn.addEventListener('click', () => {{
+        isPlaying = !isPlaying;
+        playBtn.innerHTML = isPlaying ? '⏸ Pause' : '▶ Auto Play';
+        if (isPlaying && targetProgress >= 0.98) {{
+            targetProgress = 0;
+            currentProgress = 0;
+        }}
+    }});
+
+    document.getElementById('restart-tour-btn').addEventListener('click', () => setProgress(0.0));
+
+    // =========================================================================
+    // SECTION FADE-IN MATH (TOP HEADINGS & BOTTOM PANELS)
+    // =========================================================================
+    function calcWindow(p, start, enterEnd, exitStart, end) {{
+        if (p < start || p > end) return {{ opacity: 0, y: 24 }};
+        let opacity = 0, y = 0;
+        if (p <= enterEnd) {{
+            const t = (p - start) / (enterEnd - start || 1);
+            opacity = t; y = 24 * (1 - t);
+        }} else if (p <= exitStart) {{
+            opacity = 1; y = 0;
+        }} else {{
+            const t = (p - exitStart) / (end - exitStart || 1);
+            opacity = 1 - t; y = -24 * t;
+        }}
+        return {{ opacity, y }};
+    }}
+
+    function applyTransition(el, {{ opacity, y }}) {{
+        el.style.opacity = opacity.toFixed(3);
+        el.style.transform = `translateY(${{y.toFixed(1)}}px)`;
+        if (opacity > 0.05) el.classList.add('active');
+        else el.classList.remove('active');
+    }}
+
+    function applyBottomTransition(el, {{ opacity, y }}) {{
+        el.style.opacity = opacity.toFixed(3);
+        el.style.transform = `translateX(-50%) translateY(${{y.toFixed(1)}}px)`;
+        if (opacity > 0.05) el.classList.add('active');
+        else el.classList.remove('active');
+    }}
+
+    function updateSections(p) {{
+        // Section 0: 0% - 20% (Story)
+        const w0 = calcWindow(p, 0.00, 0.00, 0.14, 0.22);
+        applyTransition(topHeadings[0], w0);
+        applyBottomTransition(bottomPanels[0], w0);
+
+        // Section 1: 20% - 42% (Science)
+        const w1 = calcWindow(p, 0.20, 0.26, 0.36, 0.44);
+        applyTransition(topHeadings[1], w1);
+        applyBottomTransition(bottomPanels[1], w1);
+
+        // Section 2: 42% - 66% (Calculator)
+        const w2 = calcWindow(p, 0.42, 0.48, 0.60, 0.68);
+        applyTransition(topHeadings[2], w2);
+        applyBottomTransition(bottomPanels[2], w2);
+
+        // Section 3: 66% - 88% (Vision AI)
+        const w3 = calcWindow(p, 0.66, 0.72, 0.82, 0.90);
+        applyTransition(topHeadings[3], w3);
+        applyBottomTransition(bottomPanels[3], w3);
+
+        // Section 4: 88% - 100% (Action)
+        const w4 = calcWindow(p, 0.88, 0.94, 1.00, 1.00);
+        applyTransition(topHeadings[4], w4);
+        applyBottomTransition(bottomPanels[4], w4);
+
+        // Update active chapter button
+        chapterBtns.forEach(btn => {{
+            const val = parseFloat(btn.getAttribute('data-progress'));
+            if (Math.abs(p - val) < 0.12) btn.classList.add('active');
+            else btn.classList.remove('active');
+        }});
+    }}
+
+    function updateHUD(p, frameIdx) {{
+        const pct = Math.round(p * 100);
+        percentLabel.textContent = pct + '%';
+        progressFill.style.width = pct + '%';
+        frameCounter.textContent = `Frame ${{String(frameIdx + 1).padStart(3, '0')}} / ${{String(TOTAL_FRAMES).padStart(3, '0')}}`;
+
+        if (p < 0.22) phaseTag.textContent = 'ACT 1 · INCEPTION';
+        else if (p < 0.44) phaseTag.textContent = 'ACT 2 · THE 3 PILLARS';
+        else if (p < 0.68) phaseTag.textContent = 'ACT 3 · CALCULATOR';
+        else if (p < 0.90) phaseTag.textContent = 'ACT 4 · VISION AI';
+        else phaseTag.textContent = 'ACT 5 · CONSERVATION';
+    }}
+
+    function renderLoop() {{
+        if (isPlaying) {{
+            targetProgress += 0.0035 * playDirection;
+            if (targetProgress >= 1) {{
+                targetProgress = 1;
+                playDirection = -1;
+            }} else if (targetProgress <= 0) {{
+                targetProgress = 0;
+                playDirection = 1;
+            }}
+        }}
+
+        currentProgress += (targetProgress - currentProgress) * LERP;
+        if (Math.abs(targetProgress - currentProgress) < 0.0001) {{
+            currentProgress = targetProgress;
+        }}
+
+        const frameIndex = Math.min(TOTAL_FRAMES - 1, Math.max(0, Math.round(currentProgress * (TOTAL_FRAMES - 1))));
+        drawCanvasFrame(frameIndex);
+        updateSections(currentProgress);
+        updateHUD(currentProgress, frameIndex);
+
+        requestAnimationFrame(renderLoop);
+    }}
+
+    // =========================================================================
+    // CHAPTER 3: LIVE INTERACTIVE CALCULATOR
+    // =========================================================================
+    const localDatabase = {db_json};
+    let currentQty = 1;
+    let currentProduct = localDatabase['coffee'] || Object.values(localDatabase)[0];
+
+    const calcInput = document.getElementById('calc-input');
+    const qtyMinus = document.getElementById('qty-minus');
+    const qtyPlus = document.getElementById('qty-plus');
+    const qtyDisplay = document.getElementById('qty-display');
+
+    const cName = document.getElementById('c-name');
+    const cUnit = document.getElementById('c-unit');
+    const cTotal = document.getElementById('c-total');
+    const cBlue = document.getElementById('c-blue');
+    const cGreen = document.getElementById('c-green');
+    const cGrey = document.getElementById('c-grey');
+
+    const eqShowers = document.getElementById('eq-showers');
+    const eqDrink = document.getElementById('eq-drink');
+    const eqTubs = document.getElementById('eq-tubs');
+    const eqFlush = document.getElementById('eq-flush');
+
+    function updateCalcDisplay() {{
+        if (!currentProduct) return;
+        const total = (currentProduct.total || 0) * currentQty;
+        const blue = (currentProduct.blue || 0) * currentQty;
+        const green = (currentProduct.green || 0) * currentQty;
+        const grey = (currentProduct.grey || 0) * currentQty;
+
+        cName.textContent = currentProduct.name;
+        cUnit.textContent = `(${{currentProduct.unit}})`;
+        cTotal.textContent = total.toLocaleString() + ' L';
+        cBlue.textContent = blue.toLocaleString() + ' L';
+        cGreen.textContent = green.toLocaleString() + ' L';
+        cGrey.textContent = grey.toLocaleString() + ' L';
+
+        eqShowers.textContent = (total / 65).toFixed(1);
+        eqDrink.textContent = Math.round(total / 3);
+        eqTubs.textContent = (total / 150).toFixed(1);
+        eqFlush.textContent = Math.round(total / 6);
+    }}
+
+    function selectProduct(query) {{
+        const q = query.toLowerCase().trim();
+        if (!q) return;
+        let match = localDatabase[q];
+        if (!match) {{
+            for (const k in localDatabase) {{
+                if (k.includes(q) || q.includes(k)) {{
+                    match = localDatabase[k];
+                    break;
+                }}
+            }}
+        }}
+        if (match) {{
+            currentProduct = match;
+            updateCalcDisplay();
+        }}
+    }}
+
+    calcInput.addEventListener('input', (e) => selectProduct(e.target.value));
+
+    document.querySelectorAll('.calc-pill').forEach(pill => {{
+        pill.addEventListener('click', () => {{
+            const q = pill.getAttribute('data-q');
+            calcInput.value = q;
+            selectProduct(q);
+        }});
+    }});
+
+    qtyMinus.addEventListener('click', () => {{
+        if (currentQty > 1) {{
+            currentQty--;
+            qtyDisplay.textContent = currentQty + 'x';
+            updateCalcDisplay();
+        }}
+    }});
+
+    qtyPlus.addEventListener('click', () => {{
+        if (currentQty < 100) {{
+            currentQty++;
+            qtyDisplay.textContent = currentQty + 'x';
+            updateCalcDisplay();
+        }}
+    }});
+
+    // =========================================================================
+    // CHAPTER 4: YOLO26N REAL-TIME COMPUTER VISION SCANNER
+    // =========================================================================
+    const toggleCamBtn = document.getElementById('toggle-cam-btn');
+    const opencvScanBtn = document.getElementById('opencv-scan-btn');
+    const webcamStream = document.getElementById('webcam-stream');
+    const annotatedStream = document.getElementById('annotated-stream');
+    const boxMock = document.getElementById('box-mock');
+    const videoPh = document.getElementById('video-ph');
+    const camStatus = document.getElementById('cam-status');
+    const vObject = document.getElementById('v-object');
+    const vFootprint = document.getElementById('v-footprint');
+    const vBlue = document.getElementById('v-blue');
+    const vGreen = document.getElementById('v-green');
+    const vGrey = document.getElementById('v-grey');
+    const vShowers = document.getElementById('v-showers');
+    const vDays = document.getElementById('v-days');
+
+    let isCamRunning = false;
+    let localStream = null;
+    let inferenceTimer = null;
+    let isDetecting = false;
+
+    const captureCanvas = document.createElement('canvas');
+    const captureCtx = captureCanvas.getContext('2d');
+
+    // Ensure parent iframe permits camera access
+    try {{
+        if (window.parent && window.parent.document) {{
+            window.parent.document.querySelectorAll('iframe').forEach(f => {{
+                f.setAttribute('allow', 'camera *; microphone *; autoplay *; display-capture *');
+            }});
+        }}
+    }} catch (e) {{}}
+
+    const acquireMediaStream = async () => {{
+        const constraintsList = [
+            {{ video: {{ width: {{ ideal: 640 }}, height: {{ ideal: 480 }}, facingMode: 'user' }} }},
+            {{ video: true }}
+        ];
+
+        let lastErr = null;
+        for (const constraints of constraintsList) {{
+            try {{
+                if (window.parent && window.parent.navigator && window.parent.navigator.mediaDevices && window.parent.navigator.mediaDevices.getUserMedia) {{
+                    return await window.parent.navigator.mediaDevices.getUserMedia(constraints);
+                }}
+            }} catch (err) {{ lastErr = err; }}
+
+            try {{
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {{
+                    return await navigator.mediaDevices.getUserMedia(constraints);
+                }}
+            }} catch (err) {{ lastErr = err; }}
+        }}
+        throw lastErr || new Error('No webcam access available');
+    }};
+
+    const renderDetectionResults = (data) => {{
+        if (!data || data.status !== 'ok') return;
+
+        // Render annotated frame if available
+        if (data.annotated_image) {{
+            annotatedStream.src = data.annotated_image;
+            annotatedStream.style.display = 'block';
+        }}
+
+        if (data.items && data.items.length > 0) {{
+            vObject.innerHTML = data.items.map(it => 
+                `<span style="background:rgba(34,211,238,0.18); border:1px solid rgba(34,211,238,0.45); padding:2px 7px; border-radius:6px; color:#fff; font-size:0.75rem; font-weight:700;">${{it.name}}</span>`
+            ).join('');
+
+            vFootprint.textContent = Number(data.total_liters).toLocaleString() + ' Liters';
+            vBlue.textContent = Number(data.total_blue).toLocaleString() + 'L';
+            vGreen.textContent = Number(data.total_green).toLocaleString() + 'L';
+            vGrey.textContent = Number(data.total_grey).toLocaleString() + 'L';
+            vShowers.textContent = Number(data.showers).toLocaleString();
+            vDays.textContent = Number(data.drinking_days).toLocaleString();
+            camStatus.textContent = '● YOLO26N: ' + data.items.length + ' Object(s) Identified';
+            camStatus.style.color = 'var(--cyan-glow)';
+        }} else {{
+            vObject.innerHTML = '<span style="color:var(--text-low); font-style:italic; font-size:0.75rem;">Scanning… (Show bottle, phone, cup, laptop, apple)</span>';
+            vFootprint.textContent = '0 Liters';
+            vBlue.textContent = '0L';
+            vGreen.textContent = '0L';
+            vGrey.textContent = '0L';
+            vShowers.textContent = '0';
+            vDays.textContent = '0';
+            camStatus.textContent = '● YOLO26N Active · Live Inference';
+            camStatus.style.color = '#38bdf8';
+        }}
+    }};
+
+    const runFrameInference = async () => {{
+        if (!isCamRunning || isDetecting) return;
+        if (!webcamStream.videoWidth) return;
+
+        isDetecting = true;
+        try {{
+            captureCanvas.width = 480;
+            captureCanvas.height = 360;
+            captureCtx.drawImage(webcamStream, 0, 0, 480, 360);
+            const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.72);
+
+            const resp = await fetch('http://127.0.0.1:8502/api/detect', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ image: dataUrl }})
+            }});
+
+            if (resp.ok) {{
+                const data = await resp.json();
+                renderDetectionResults(data);
+            }}
+        }} catch (err) {{
+            console.warn('YOLO inference call failed:', err);
+        }} finally {{
+            isDetecting = false;
+        }}
+    }};
+
+    toggleCamBtn.addEventListener('click', async () => {{
+        if (!isCamRunning) {{
+            camStatus.textContent = '● Connecting Camera...';
+            camStatus.style.color = '#38bdf8';
+            try {{
+                localStream = await acquireMediaStream();
+                webcamStream.srcObject = localStream;
+                webcamStream.style.display = 'block';
+                videoPh.style.display = 'none';
+                boxMock.style.display = 'none';
+                await webcamStream.play();
+
+                camStatus.textContent = '● Live YOLO26n Stream Active';
+                camStatus.style.color = 'var(--cyan-glow)';
+                toggleCamBtn.textContent = '■ Stop Live Camera';
+                toggleCamBtn.style.background = 'rgba(239, 68, 68, 0.25)';
+                toggleCamBtn.style.border = '1px solid rgba(239, 68, 68, 0.5)';
+                isCamRunning = true;
+
+                // Continuous YOLO inference loop (~2.5 FPS)
+                inferenceTimer = setInterval(runFrameInference, 400);
+
+            }} catch (err) {{
+                console.warn('Camera stream could not start:', err);
+                webcamStream.style.display = 'none';
+                videoPh.style.display = 'block';
+                videoPh.innerHTML = '<div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div><div style="color:var(--cyan-glow); font-weight:700;">Webcam Blocked · Use OpenCV Scan</div><div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Or click OpenCV Scan to capture directly from host camera 0</div>';
+                camStatus.textContent = '● Camera Blocked';
+                camStatus.style.color = '#f59e0b';
+            }}
+        }} else {{
+            if (localStream) {{
+                try {{
+                    localStream.getTracks().forEach(t => t.stop());
+                }} catch (e) {{}}
+                localStream = null;
+            }}
+            if (inferenceTimer) clearInterval(inferenceTimer);
+            webcamStream.style.display = 'none';
+            annotatedStream.style.display = 'none';
+            videoPh.style.display = 'block';
+            videoPh.innerHTML = '<div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div><div style="font-weight:700; color:#fff;">Live YOLO26n Vision Scanner</div><div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Point camera at items (phone, bottle, cup, laptop, apple, book)</div>';
+            boxMock.style.display = 'none';
+            camStatus.textContent = '● Offline';
+            camStatus.style.color = 'var(--text-low)';
+            toggleCamBtn.textContent = '▶ Live Webcam';
+            toggleCamBtn.style.background = 'linear-gradient(135deg, #0284c7, #22d3ee)';
+            toggleCamBtn.style.border = 'none';
+            isCamRunning = false;
+        }}
+    }});
+
+    // OpenCV direct hardware scan button
+    opencvScanBtn.addEventListener('click', async () => {{
+        camStatus.textContent = '● Scanning via OpenCV cv2.VideoCapture(0)...';
+        camStatus.style.color = '#38bdf8';
+        videoPh.style.display = 'none';
+        try {{
+            const resp = await fetch('http://127.0.0.1:8502/api/capture_opencv');
+            if (resp.ok) {{
+                const data = await resp.json();
+                renderDetectionResults(data);
+                annotatedStream.style.display = 'block';
+            }} else {{
+                const errData = await resp.json();
+                camStatus.textContent = '● OpenCV Error: ' + (errData.message || 'Failed');
+                camStatus.style.color = '#ef4444';
+                videoPh.style.display = 'block';
+            }}
+        }} catch (err) {{
+            camStatus.textContent = '● OpenCV Connection Failed';
+            camStatus.style.color = '#ef4444';
+            videoPh.style.display = 'block';
+        }}
+    }});
+
+    // Initialize sequence
+    updateCalcDisplay();
+    preloadImageSequence();
+}})();
+</script>
+</body>
+</html>
+"""
+
+# Render the Single Unified Scrollytelling Viewport
+components.html(UNIFIED_HTML, height=1000, scrolling=False)

@@ -102,11 +102,14 @@ def cleanup_temp_uploads(max_age_seconds: int = TEMP_FILE_TTL_SECONDS) -> int:
 
 def save_temp_image(img_bytes: bytes, prefix: str = "upload") -> Path:
     """Save image bytes to temporary storage and trigger background prune."""
-    cleanup_temp_uploads()
-    filename = f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
-    dest = TEMP_UPLOADS_DIR / filename
-    dest.write_bytes(img_bytes)
-    return dest
+    try:
+        cleanup_temp_uploads()
+        filename = f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
+        dest = TEMP_UPLOADS_DIR / filename
+        dest.write_bytes(img_bytes)
+        return dest
+    except Exception:
+        return TEMP_UPLOADS_DIR / "fallback.jpg"
 
 
 def _start_temp_cleanup_daemon() -> None:
@@ -1992,8 +1995,12 @@ html, body {{
     // 1. Photo Upload & Drag-and-Drop Handler
     // ==========================================
     const analyzeImageFile = (file) => {{
-        if (!file || !file.type.startsWith('image/')) {{
-            alert('Please select an image file (JPG, PNG, or WEBP).');
+        const isImage = file && (
+            (file.type && file.type.startsWith('image/')) ||
+            /\.(jpe?g|png|webp|bmp|gif|tiff|avif|heic)$/i.test(file.name || '')
+        );
+        if (!isImage) {{
+            alert('Please select an image file (JPG, PNG, WEBP, or similar).');
             return;
         }}
         stopWebcam();

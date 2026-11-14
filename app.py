@@ -1095,6 +1095,37 @@ html, body {{
     <div id="loader-count" style="font-size:0.85rem; color:var(--text-mid);">Buffering 199 high-res frames...</div>
 </div>
 
+<script>
+// Standalone fail-safe error watcher & preloader force-unlock
+window.onerror = function(msg, url, lineNo, colNo, error) {{
+    var countEl = document.getElementById('loader-count');
+    if (countEl) {{
+        countEl.textContent = 'Init Error: ' + msg + ' (L' + lineNo + ')';
+        countEl.style.color = '#ef4444';
+    }}
+    var pre = document.getElementById('preloader');
+    if (pre) {{
+        setTimeout(function() {{
+            pre.classList.add('loaded');
+            pre.style.opacity = '0';
+            pre.style.display = 'none';
+        }}, 1800);
+    }}
+    return false;
+}};
+
+// Guaranteed preloader unlock within 1.8s regardless of any frame/script blockages
+setTimeout(function() {{
+    var pre = document.getElementById('preloader');
+    if (pre && !pre.classList.contains('loaded')) {{
+        pre.classList.add('loaded');
+        pre.style.opacity = '0';
+        pre.style.pointerEvents = 'none';
+        pre.style.display = 'none';
+    }}
+}}, 1800);
+</script>
+
 <!-- Liquid Canvas -->
 <canvas id="water-canvas"></canvas>
 <div class="vignette-overlay"></div>
@@ -1527,8 +1558,11 @@ html, body {{
         if (isReady) return;
         isReady = true;
         preloader.classList.add('loaded');
-        resizeCanvas();
-        renderLoop();
+        preloader.style.opacity = '0';
+        preloader.style.pointerEvents = 'none';
+        setTimeout(() => {{ preloader.style.display = 'none'; }}, 500);
+        try {{ resizeCanvas(); }} catch (e) {{}}
+        try {{ renderLoop(); }} catch (e) {{}}
     }}
 
     // Safety timeout: unlock within 1.2s

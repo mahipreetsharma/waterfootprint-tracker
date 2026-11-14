@@ -1974,7 +1974,7 @@ setTimeout(function() {{
                         return await resp.json();
                     }} else {{
                         const errTxt = await resp.text().catch(() => '');
-                        const snippet = errTxt.slice(0, 40).replace(/[\r\n]+/g, ' ');
+                        const snippet = errTxt.slice(0, 40).trim();
                         attemptedErrors.push(`${{url}} [Non-JSON response: ${{snippet}}]`);
                     }}
                 }} else {{

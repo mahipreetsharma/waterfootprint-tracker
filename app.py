@@ -269,17 +269,17 @@ def inject_starlette_api_route() -> None:
         import gc
         import tornado.web
         from tornado.web import URLSpec
-        try:
-            from tornado.routing import Rule, PathMatches
-        except ImportError:
-            Rule = None
-            PathMatches = None
 
         class TornadoDetectHandler(tornado.web.RequestHandler):
             def set_default_headers(self):
                 self.set_header("Access-Control-Allow-Origin", "*")
                 self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                self.set_header("Access-Control-Allow-Headers", "Content-Type")
+                self.set_header("Access-Control-Allow-Headers", "*")
+                self.set_header("Access-Control-Max-Age", "86400")
+
+            def check_xsrf_cookie(self):
+                # Critical: Disable XSRF cookie check for API requests
+                pass
 
             def options(self, *args, **kwargs):
                 self.set_status(204)
@@ -321,50 +321,45 @@ def inject_starlette_api_route() -> None:
                 tornado_apps.add(obj)
 
         for tapp in tornado_apps:
-            # 1. Prepend to wildcard_router rules so it runs before /(.*)
-            if hasattr(tapp, "wildcard_router") and hasattr(tapp.wildcard_router, "rules"):
-                for r in tapp.wildcard_router.rules:
-                    target = getattr(r, "target", None)
-                    if hasattr(target, "rules") and Rule and PathMatches:
-                        existing_rules = [getattr(getattr(sub, "matcher", None), "regex", None) for sub in target.rules]
-                        existing_pats = [p.pattern if p else "" for p in existing_rules]
-                        if r"/_stcore/detect" not in existing_pats:
-                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/detect"), TornadoDetectHandler))
-                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/status"), TornadoDetectHandler))
-                            target.rules.insert(0, Rule(PathMatches(r"/api/detect"), TornadoDetectHandler))
-                            target.rules.insert(0, Rule(PathMatches(r"/api/status"), TornadoDetectHandler))
+            specs = [
+                URLSpec(r"/_stcore/detect/?", TornadoDetectHandler),
+                URLSpec(r"/_stcore/status/?", TornadoDetectHandler),
+                URLSpec(r"/api/detect/?", TornadoDetectHandler),
+                URLSpec(r"/api/status/?", TornadoDetectHandler),
+            ]
 
-            # 2. Prepend to default_router rules
-            if hasattr(tapp, "default_router") and hasattr(tapp.default_router, "rules"):
-                for r in tapp.default_router.rules:
-                    target = getattr(r, "target", None)
-                    if hasattr(target, "rules") and Rule and PathMatches:
-                        existing_rules = [getattr(getattr(sub, "matcher", None), "regex", None) for sub in target.rules]
-                        existing_pats = [p.pattern if p else "" for p in existing_rules]
-                        if r"/_stcore/detect" not in existing_pats:
-                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/detect"), TornadoDetectHandler))
-                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/status"), TornadoDetectHandler))
-                            target.rules.insert(0, Rule(PathMatches(r"/api/detect"), TornadoDetectHandler))
-                            target.rules.insert(0, Rule(PathMatches(r"/api/status"), TornadoDetectHandler))
+            # 1. Prepend directly to wildcard_router.rules list (Tornado 5 & 6)
+            if hasattr(tapp, "wildcard_router") and hasattr(tapp.wildcard_router, "rules") and isinstance(tapp.wildcard_router.rules, list):
+                existing_rules = [getattr(r, "matcher", None) for r in tapp.wildcard_router.rules]
+                existing_pats = [getattr(getattr(m, "regex", None), "pattern", "") for m in existing_rules if m]
+                if r"/_stcore/detect/?" not in existing_pats:
+                    for s in reversed(specs):
+                        tapp.wildcard_router.rules.insert(0, s)
+
+            # 2. Prepend directly to default_router.rules list
+            if hasattr(tapp, "default_router") and hasattr(tapp.default_router, "rules") and isinstance(tapp.default_router.rules, list):
+                existing_rules = [getattr(r, "matcher", None) for r in tapp.default_router.rules]
+                existing_pats = [getattr(getattr(m, "regex", None), "pattern", "") for m in existing_rules if m]
+                if r"/_stcore/detect/?" not in existing_pats:
+                    for s in reversed(specs):
+                        tapp.default_router.rules.insert(0, s)
 
             # 3. Prepend to handlers list
             if hasattr(tapp, "handlers"):
                 for host_matcher, host_handlers in tapp.handlers:
                     existing = [getattr(spec, "regex", None) for spec in host_handlers]
                     existing_patterns = [e.pattern if e else "" for e in existing]
-                    if r"/_stcore/detect" not in existing_patterns:
-                        host_handlers.insert(0, URLSpec(r"/_stcore/detect", TornadoDetectHandler))
-                        host_handlers.insert(0, URLSpec(r"/_stcore/status", TornadoDetectHandler))
-                        host_handlers.insert(0, URLSpec(r"/api/detect", TornadoDetectHandler))
-                        host_handlers.insert(0, URLSpec(r"/api/status", TornadoDetectHandler))
+                    if r"/_stcore/detect/?" not in existing_patterns:
+                        for s in reversed(specs):
+                            host_handlers.insert(0, s)
 
             # 4. Standard fallback add_handlers
             try:
                 tapp.add_handlers(r".*", [
-                    (r"/_stcore/detect", TornadoDetectHandler),
-                    (r"/_stcore/status", TornadoDetectHandler),
-                    (r"/api/detect", TornadoDetectHandler),
-                    (r"/api/status", TornadoDetectHandler),
+                    (r"/_stcore/detect/?", TornadoDetectHandler),
+                    (r"/_stcore/status/?", TornadoDetectHandler),
+                    (r"/api/detect/?", TornadoDetectHandler),
+                    (r"/api/status/?", TornadoDetectHandler),
                 ])
             except Exception:
                 pass
@@ -493,6 +488,17 @@ body, .stApp {
 </style>
 """
 st.markdown(ST_RESET_CSS, unsafe_allow_html=True)
+
+# Detect runtime host/origin for Streamlit Cloud
+detected_origin = ""
+try:
+    if hasattr(st, "context") and hasattr(st.context, "headers"):
+        host = st.context.headers.get("host", "")
+        if host:
+            proto = "https" if ("streamlit.app" in host or not (host.startswith("localhost") or host.startswith("127.0.0.1"))) else "http"
+            detected_origin = f"{proto}://{host}"
+except Exception:
+    pass
 
 # -----------------------------------------------------------------------------
 # 5. The Unified Scrollytelling Engine (HTML5 / Canvas / Glassmorphism)
@@ -1840,13 +1846,17 @@ html, body {{
     const captureCanvas = document.createElement('canvas');
     const captureCtx = captureCanvas.getContext('2d');
 
+    const pythonDetectedOrigin = "{detected_origin}";
+
     const callVisionApi = async (endpoint, options = {{}}) => {{
-        let parentOrigin = '';
-        try {{
-            if (window.location && window.location.ancestorOrigins && window.location.ancestorOrigins[0]) {{
-                parentOrigin = window.location.ancestorOrigins[0];
-            }}
-        }} catch (e) {{}}
+        let parentOrigin = pythonDetectedOrigin || '';
+        if (!parentOrigin) {{
+            try {{
+                if (window.location && window.location.ancestorOrigins && window.location.ancestorOrigins[0]) {{
+                    parentOrigin = window.location.ancestorOrigins[0];
+                }}
+            }} catch (e) {{}}
+        }}
 
         if (!parentOrigin && document.referrer) {{
             try {{
@@ -1865,9 +1875,10 @@ html, body {{
 
         // 1. Parent origin targets (works on Streamlit Cloud over HTTPS)
         if (parentOrigin) {{
-            candidateUrls.push(parentOrigin + '/_stcore' + baseEndpoint);
-            candidateUrls.push(parentOrigin + '/api' + baseEndpoint);
-            candidateUrls.push(parentOrigin + endpoint);
+            const cleanOrigin = parentOrigin.replace(/\/+$/, '');
+            candidateUrls.push(cleanOrigin + '/_stcore' + baseEndpoint);
+            candidateUrls.push(cleanOrigin + '/api' + baseEndpoint);
+            candidateUrls.push(cleanOrigin + endpoint);
         }}
 
         // 2. Relative targets
@@ -1880,18 +1891,23 @@ html, body {{
         candidateUrls.push(`http://127.0.0.1:8502${{endpoint}}`);
         candidateUrls.push(`http://localhost:8502${{endpoint}}`);
 
-        let lastErr = null;
+        const attemptedErrors = [];
         for (const url of candidateUrls) {{
             try {{
                 const resp = await fetch(url, options);
                 if (resp.ok) {{
                     return await resp.json();
+                }} else {{
+                    const errTxt = await resp.text().catch(() => '');
+                    attemptedErrors.push(`${{url}} [HTTP ${{resp.status}}]`);
                 }}
             }} catch (err) {{
-                lastErr = err;
+                attemptedErrors.push(`${{url}} [${{err.message || 'Fetch failed'}}]`);
             }}
         }}
-        throw lastErr || new Error('All vision endpoints unreachable');
+        console.warn('Vision API candidate failures:\n' + attemptedErrors.join('\n'));
+        const firstErr = attemptedErrors[0] || 'Inference service unreachable';
+        throw new Error(firstErr);
     }};
 
     // Ensure parent iframe permits camera access
@@ -1989,22 +2005,46 @@ html, body {{
 
         const reader = new FileReader();
         reader.onload = async (e) => {{
-            const dataUrl = e.target.result;
-            annotatedStream.src = dataUrl;
-            annotatedStream.style.display = 'block';
+            const rawDataUrl = e.target.result;
+            const img = new Image();
+            img.onload = async () => {{
+                // Resize image to max 1280px to optimize network transport and respect server buffers
+                const maxDim = 1280;
+                let w = img.width;
+                let h = img.height;
+                if (w > maxDim || h > maxDim) {{
+                    if (w > h) {{
+                        h = Math.round((h * maxDim) / w);
+                        w = maxDim;
+                    }} else {{
+                        w = Math.round((w * maxDim) / h);
+                        h = maxDim;
+                    }}
+                }}
+                const rCanvas = document.createElement('canvas');
+                rCanvas.width = w;
+                rCanvas.height = h;
+                const rCtx = rCanvas.getContext('2d');
+                rCtx.drawImage(img, 0, 0, w, h);
+                const dataUrl = rCanvas.toDataURL('image/jpeg', 0.85);
 
-            try {{
-                const data = await callVisionApi('/api/detect', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ image: dataUrl }})
-                }});
-                renderDetectionResults(data, 'Uploaded Photo');
-            }} catch (err) {{
-                console.warn('Upload inference call failed:', err);
-                camStatus.textContent = '● API Server Offline';
-                camStatus.style.color = '#ef4444';
-            }}
+                annotatedStream.src = dataUrl;
+                annotatedStream.style.display = 'block';
+
+                try {{
+                    const data = await callVisionApi('/api/detect', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ image: dataUrl }})
+                    }});
+                    renderDetectionResults(data, 'Uploaded Photo');
+                }} catch (err) {{
+                    console.error('Upload inference call failed:', err);
+                    camStatus.textContent = '● ' + (err.message || 'API Server Offline');
+                    camStatus.style.color = '#ef4444';
+                }}
+            }};
+            img.src = rawDataUrl;
         }};
         reader.readAsDataURL(file);
     }};

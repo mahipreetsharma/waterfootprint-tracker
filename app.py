@@ -1912,7 +1912,7 @@ setTimeout(function() {{
 
         // 1. Parent origin targets (works on Streamlit Cloud over HTTPS)
         if (parentOrigin) {{
-            const cleanOrigin = parentOrigin.replace(/\/+$/, '');
+            const cleanOrigin = parentOrigin.endsWith('/') ? parentOrigin.slice(0, -1) : parentOrigin;
             candidateUrls.push(cleanOrigin + '/_stcore' + baseEndpoint);
             candidateUrls.push(cleanOrigin + '/api' + baseEndpoint);
             candidateUrls.push(cleanOrigin + endpoint);
@@ -2029,10 +2029,13 @@ setTimeout(function() {{
     // 1. Photo Upload & Drag-and-Drop Handler
     // ==========================================
     const analyzeImageFile = (file) => {{
-        const isImage = file && (
-            (file.type && file.type.startsWith('image/')) ||
-            /\.(jpe?g|png|webp|bmp|gif|tiff|avif|heic)$/i.test(file.name || '')
-        );
+        if (!file) return;
+        const fname = (file.name || '').toLowerCase();
+        const isImage = (file.type && file.type.startsWith('image/')) ||
+            fname.endsWith('.jpg') || fname.endsWith('.jpeg') ||
+            fname.endsWith('.png') || fname.endsWith('.webp') ||
+            fname.endsWith('.bmp') || fname.endsWith('.gif') ||
+            fname.endsWith('.avif') || fname.endsWith('.heic');
         if (!isImage) {{
             alert('Please select an image file (JPG, PNG, WEBP, or similar).');
             return;

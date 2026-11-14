@@ -512,17 +512,22 @@ ST_RESET_CSS = """
     margin: 0 !important;
     max-width: 100vw !important;
     width: 100vw !important;
+    overflow: hidden !important;
 }
 iframe {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
     width: 100vw !important;
     height: 100vh !important;
     border: none !important;
+    z-index: 999999 !important;
     background: #040608 !important;
     display: block !important;
 }
 body, .stApp {
     background-color: #040608 !important;
-    color: #fff !important;
+    overflow: hidden !important;
 }
 </style>
 """
@@ -2441,107 +2446,3 @@ inject_starlette_api_route()
 
 # Render the Single Unified Scrollytelling Viewport
 components.html(UNIFIED_HTML, height=1000, scrolling=False)
-
-
-# =============================================================================
-# NATIVE CLOUD STREAMLIT VISION & HARDWARE SENSOR LAB
-# Bypasses all browser sandbox / iframe network proxy limitations with 100% reliability
-# =============================================================================
-st.markdown("<div id='vision-lab'></div>", unsafe_allow_html=True)
-st.markdown("""
-<div style="margin-top: 1rem; margin-bottom: 1.5rem; padding: 1.5rem 2rem; background: radial-gradient(circle at 50% 0%, rgba(34, 211, 238, 0.12), transparent 75%), #060a0f; border: 1px solid rgba(34, 211, 238, 0.3); border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);">
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-        <div>
-            <div style="font-size: 0.72rem; font-weight: 800; color: #38bdf8; letter-spacing: 0.15em; text-transform: uppercase;">Direct Cloud Vision & Hardware Sensor Deck</div>
-            <h2 style="font-family: system-ui, -apple-system, sans-serif; font-size: 1.55rem; font-weight: 800; color: #fff; margin: 0.2rem 0;">
-                ⚡ YOLO26N Vision & Water Footprint Lab
-            </h2>
-            <p style="color: #94a3b8; font-size: 0.85rem; margin: 0;">
-                Upload any item photo (keyboard, bottle, cup, shirt, apple, etc.) or scan with your device webcam. Direct Python pipeline with zero network dropouts.
-            </p>
-        </div>
-        <div style="display: flex; gap: 0.5rem; align-items: center;">
-            <span style="background: rgba(52, 211, 153, 0.15); border: 1px solid #34d399; color: #34d399; padding: 0.35rem 0.85rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700;">
-                ● YOLO26N ONLINE
-            </span>
-            <span style="background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; padding: 0.35rem 0.85rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700;">
-                💧 100+ DB ITEMS
-            </span>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-
-def _render_native_vision_results(raw_bytes: bytes, source_tag: str) -> None:
-    try:
-        with st.spinner("⚡ Running YOLO26n vision inference and computing lifecycle water metrics..."):
-            res = run_detection_pipeline(raw_bytes)
-
-        detected_count = res.get("detected_count", 0)
-        items = res.get("items", [])
-        total_liters = res.get("total_liters", 0.0)
-
-        col_img, col_metrics = st.columns([1, 1])
-        with col_img:
-            ann_b64 = res.get("annotated_image", "")
-            if "," in ann_b64:
-                ann_b64 = ann_b64.split(",", 1)[1]
-            ann_bytes = base64.b64decode(ann_b64)
-            st.image(ann_bytes, caption=f"YOLO26n Detections ({source_tag})", use_container_width=True)
-
-        with col_metrics:
-            if detected_count == 0:
-                st.warning("⚠️ No water-database items detected. Please ensure the product is in clear view.")
-            else:
-                names_str = ", ".join(f"**{it['name']}**" for it in items)
-                st.success(f"🎯 Detected ({detected_count}): {names_str}")
-
-            st.markdown(f"""
-            <div style="background: rgba(34, 211, 238, 0.12); border: 1px solid #22d3ee; border-radius: 12px; padding: 1.1rem; text-align: center; margin-bottom: 0.8rem;">
-                <div style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 700;">Embedded Water Footprint</div>
-                <div style="font-size: 2.3rem; font-weight: 900; color: #22d3ee; font-family: monospace;">{total_liters:,.1f} Liters</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.metric("🔵 Blue Water", f"{res.get('total_blue', 0):,.1f} L")
-            with m2:
-                st.metric("🟢 Green Water", f"{res.get('total_green', 0):,.1f} L")
-            with m3:
-                st.metric("⚪ Grey Water", f"{res.get('total_grey', 0):,.1f} L")
-
-            st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
-            e1, e2, e3, e4 = st.columns(4)
-            with e1:
-                st.metric("🚿 Showers", f"{res.get('showers', 0):,.1f}")
-            with e2:
-                st.metric("🥤 Drinking Days", f"{res.get('drinking_days', 0):,.0f}")
-            with e3:
-                st.metric("🛁 Bathtubs", f"{res.get('bathtubs', 0):,.1f}")
-            with e4:
-                st.metric("🚽 Flushes", f"{res.get('flushes', 0):,.0f}")
-
-    except Exception as exc:
-        st.error(f"Inference error: {exc}")
-
-
-tab_file, tab_cam = st.tabs(["📁 Upload Image / Photo File", "📸 Live Device Camera Capture"])
-
-with tab_file:
-    uploaded = st.file_uploader(
-        "Upload any product photo (supports WEBP, PNG, JPG, JPEG)",
-        type=["webp", "png", "jpg", "jpeg"],
-        key="native_cloud_uploader",
-    )
-    if uploaded is not None:
-        _render_native_vision_results(uploaded.read(), source_tag="Uploaded Photo")
-
-with tab_cam:
-    captured = st.camera_input(
-        "Take a live snapshot with your device camera",
-        key="native_cloud_camera",
-    )
-    if captured is not None:
-        _render_native_vision_results(captured.read(), source_tag="Live Webcam")

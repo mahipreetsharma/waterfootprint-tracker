@@ -225,49 +225,83 @@ def run_detection_pipeline(img_bytes: bytes) -> dict[str, Any]:
     }
 
 
+def run_opencv_capture() -> dict[str, Any]:
+    """Capture a single frame from local hardware webcam and run detection."""
+    try:
+        cap = cv2.VideoCapture(0)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            return {"status": "error", "message": "Hardware camera not accessible on cloud host"}
+        _, buf = cv2.imencode(".jpg", frame)
+        return run_detection_pipeline(buf.tobytes())
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 def inject_starlette_api_route() -> None:
     """Dynamically register /_stcore/detect and /api/detect on the main Streamlit server port (works on Streamlit Cloud HTTPS)."""
+    injected_count = 0
+
+    # 1. STARLETTE / FASTAPI / ASGI ENGINE
     try:
         import gc
-        from starlette.applications import Starlette
         from starlette.routing import Route
         from starlette.responses import JSONResponse, Response
 
-        apps = [obj for obj in gc.get_objects() if isinstance(obj, Starlette)]
-        for app in apps:
-            existing_paths = [getattr(r, "path", None) for r in getattr(app, "routes", [])]
-            if "/_stcore/detect" in existing_paths:
-                continue
+        async def api_detect(request):
+            if request.method == "OPTIONS":
+                return Response(status_code=200, headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "86400",
+                })
+            try:
+                body = await request.json()
+                img_data = body.get("image", "")
+                if "," in img_data:
+                    _, img_data = img_data.split(",", 1)
+                img_bytes = base64.b64decode(img_data)
+                result = run_detection_pipeline(img_bytes)
+                return JSONResponse(result, headers={"Access-Control-Allow-Origin": "*"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "message": str(e)}, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
 
-            async def api_detect(request):
-                if request.method == "OPTIONS":
-                    return Response(status_code=200, headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type",
-                    })
-                try:
-                    body = await request.json()
-                    img_data = body.get("image", "")
-                    if "," in img_data:
-                        _, img_data = img_data.split(",", 1)
-                    img_bytes = base64.b64decode(img_data)
-                    result = run_detection_pipeline(img_bytes)
-                    return JSONResponse(result, headers={"Access-Control-Allow-Origin": "*"})
-                except Exception as e:
-                    return JSONResponse({"status": "error", "message": str(e)}, status_code=500, headers={"Access-Control-Allow-Origin": "*"})
+        async def api_status(request):
+            return JSONResponse({"status": "active", "model": "yolo26n"}, headers={"Access-Control-Allow-Origin": "*"})
 
-            async def api_status(request):
-                return JSONResponse({"status": "active", "model": "yolo26n"}, headers={"Access-Control-Allow-Origin": "*"})
+        async def api_opencv(request):
+            return JSONResponse(run_opencv_capture(), headers={"Access-Control-Allow-Origin": "*"})
 
-            app.routes.insert(0, Route("/_stcore/detect", api_detect, methods=["POST", "OPTIONS"]))
-            app.routes.insert(0, Route("/_stcore/status", api_status, methods=["GET", "OPTIONS"]))
-            app.routes.insert(0, Route("/api/detect", api_detect, methods=["POST", "OPTIONS"]))
-            app.routes.insert(0, Route("/api/status", api_status, methods=["GET", "OPTIONS"]))
-    except Exception:
-        pass
+        asgi_routes = [
+            Route("/_stcore/detect", api_detect, methods=["POST", "GET", "OPTIONS"]),
+            Route("/_stcore/detect/", api_detect, methods=["POST", "GET", "OPTIONS"]),
+            Route("/api/detect", api_detect, methods=["POST", "GET", "OPTIONS"]),
+            Route("/api/detect/", api_detect, methods=["POST", "GET", "OPTIONS"]),
+            Route("/_stcore/status", api_status, methods=["GET", "OPTIONS"]),
+            Route("/api/status", api_status, methods=["GET", "OPTIONS"]),
+            Route("/api/capture_opencv", api_opencv, methods=["GET", "POST", "OPTIONS"]),
+        ]
 
-    # Also support Tornado if running in Tornado mode (Standard Streamlit Server engine)
+        for obj in gc.get_objects():
+            target_list = None
+            if hasattr(obj, "routes") and isinstance(getattr(obj, "routes"), list):
+                target_list = getattr(obj, "routes")
+            elif hasattr(obj, "router") and hasattr(getattr(obj, "router"), "routes") and isinstance(getattr(obj.router, "routes"), list):
+                target_list = getattr(obj.router, "routes")
+
+            if target_list is not None:
+                existing = [getattr(r, "path", None) for r in target_list]
+                if "/_stcore/detect" not in existing:
+                    for r in reversed(asgi_routes):
+                        target_list.insert(0, r)
+                    injected_count += 1
+                    print(f"[INJECT] Injected ASGI routes into {type(obj).__name__}", flush=True)
+    except Exception as e:
+        print(f"[INJECT] Starlette injection note: {e}", flush=True)
+
+    # 2. TORNADO ENGINE (Streamlit default server)
     try:
         import gc
         import tornado.web
@@ -285,7 +319,7 @@ def inject_starlette_api_route() -> None:
                 pass
 
             def options(self, *args, **kwargs):
-                self.set_status(204)
+                self.set_status(200)
                 self.finish()
 
             def post(self, *args, **kwargs):
@@ -305,69 +339,68 @@ def inject_starlette_api_route() -> None:
 
             def get(self, *args, **kwargs):
                 self.set_header("Content-Type", "application/json")
-                self.write(json.dumps({"status": "active", "model": "yolo26n"}))
+                if "capture_opencv" in self.request.path:
+                    self.write(json.dumps(run_opencv_capture()))
+                else:
+                    self.write(json.dumps({"status": "active", "model": "yolo26n"}))
 
-        tornado_apps = set()
-        for mod_name in ["streamlit.web.server.server", "streamlit.server.server"]:
-            try:
-                mod = __import__(mod_name, fromlist=["Server"])
-                srv = getattr(mod, "Server", None)
-                if srv and hasattr(srv, "get_current"):
-                    inst = srv.get_current()
-                    if inst and hasattr(inst, "_app") and isinstance(inst._app, tornado.web.Application):
-                        tornado_apps.add(inst._app)
-            except Exception:
-                pass
+        tornado_specs = [
+            URLSpec(r".*/_stcore/detect/?", TornadoDetectHandler),
+            URLSpec(r".*/_stcore/status/?", TornadoDetectHandler),
+            URLSpec(r".*/api/detect/?", TornadoDetectHandler),
+            URLSpec(r".*/api/status/?", TornadoDetectHandler),
+            URLSpec(r".*/api/capture_opencv/?", TornadoDetectHandler),
+        ]
 
         for obj in gc.get_objects():
+            # A) Any Router with a rules list (includes _ApplicationRouter and ReversibleRuleRouter)
+            if hasattr(obj, "rules") and isinstance(getattr(obj, "rules"), list):
+                rules_list = getattr(obj, "rules")
+                existing = []
+                for r in rules_list:
+                    m = getattr(r, "matcher", None)
+                    p = getattr(getattr(m, "regex", None), "pattern", "")
+                    existing.append(p)
+                if not any(".*/_stcore/detect/?" in p for p in existing):
+                    for s in reversed(tornado_specs):
+                        rules_list.insert(0, s)
+                    injected_count += 1
+                    print(f"[INJECT] Injected Tornado rules into {type(obj).__name__} (len={len(rules_list)})", flush=True)
+
+            # B) Any Tornado Application instance
             if isinstance(obj, tornado.web.Application):
-                tornado_apps.add(obj)
+                # Inspect default_router rules and their targets
+                if hasattr(obj, "default_router") and hasattr(obj.default_router, "rules"):
+                    for r in obj.default_router.rules:
+                        target = getattr(r, "target", None)
+                        if target and hasattr(target, "rules") and isinstance(target.rules, list):
+                            for s in reversed(tornado_specs):
+                                target.rules.insert(0, s)
+                            injected_count += 1
+                            print("[INJECT] Injected into Tornado default_router rule target", flush=True)
 
-        for tapp in tornado_apps:
-            specs = [
-                URLSpec(r"/_stcore/detect/?", TornadoDetectHandler),
-                URLSpec(r"/_stcore/status/?", TornadoDetectHandler),
-                URLSpec(r"/api/detect/?", TornadoDetectHandler),
-                URLSpec(r"/api/status/?", TornadoDetectHandler),
-            ]
+                # Inspect wildcard_router rules and their targets
+                if hasattr(obj, "wildcard_router") and hasattr(obj.wildcard_router, "rules"):
+                    for r in obj.wildcard_router.rules:
+                        target = getattr(r, "target", None)
+                        if target and hasattr(target, "rules") and isinstance(target.rules, list):
+                            for s in reversed(tornado_specs):
+                                target.rules.insert(0, s)
+                            injected_count += 1
+                            print("[INJECT] Injected into Tornado wildcard_router rule target", flush=True)
 
-            # 1. Prepend directly to wildcard_router.rules list (Tornado 5 & 6)
-            if hasattr(tapp, "wildcard_router") and hasattr(tapp.wildcard_router, "rules") and isinstance(tapp.wildcard_router.rules, list):
-                existing_rules = [getattr(r, "matcher", None) for r in tapp.wildcard_router.rules]
-                existing_pats = [getattr(getattr(m, "regex", None), "pattern", "") for m in existing_rules if m]
-                if r"/_stcore/detect/?" not in existing_pats:
-                    for s in reversed(specs):
-                        tapp.wildcard_router.rules.insert(0, s)
+                # Inspect handlers list
+                if hasattr(obj, "handlers") and isinstance(obj.handlers, list):
+                    for host_matcher, host_handlers in obj.handlers:
+                        if isinstance(host_handlers, list):
+                            for s in reversed(tornado_specs):
+                                host_handlers.insert(0, s)
+                            injected_count += 1
+                            print("[INJECT] Injected into Tornado host_handlers list", flush=True)
+    except Exception as e:
+        print(f"[INJECT] Tornado injection note: {e}", flush=True)
 
-            # 2. Prepend directly to default_router.rules list
-            if hasattr(tapp, "default_router") and hasattr(tapp.default_router, "rules") and isinstance(tapp.default_router.rules, list):
-                existing_rules = [getattr(r, "matcher", None) for r in tapp.default_router.rules]
-                existing_pats = [getattr(getattr(m, "regex", None), "pattern", "") for m in existing_rules if m]
-                if r"/_stcore/detect/?" not in existing_pats:
-                    for s in reversed(specs):
-                        tapp.default_router.rules.insert(0, s)
-
-            # 3. Prepend to handlers list
-            if hasattr(tapp, "handlers"):
-                for host_matcher, host_handlers in tapp.handlers:
-                    existing = [getattr(spec, "regex", None) for spec in host_handlers]
-                    existing_patterns = [e.pattern if e else "" for e in existing]
-                    if r"/_stcore/detect/?" not in existing_patterns:
-                        for s in reversed(specs):
-                            host_handlers.insert(0, s)
-
-            # 4. Standard fallback add_handlers
-            try:
-                tapp.add_handlers(r".*", [
-                    (r"/_stcore/detect/?", TornadoDetectHandler),
-                    (r"/_stcore/status/?", TornadoDetectHandler),
-                    (r"/api/detect/?", TornadoDetectHandler),
-                    (r"/api/status/?", TornadoDetectHandler),
-                ])
-            except Exception:
-                pass
-    except Exception:
-        pass
+    print(f"[INJECT] Total routers injected: {injected_count}", flush=True)
 
 
 inject_starlette_api_route()
@@ -1920,11 +1953,14 @@ setTimeout(function() {{
 
         // 2. Relative targets
         candidateUrls.push('/_stcore' + baseEndpoint);
+        candidateUrls.push('/api' + baseEndpoint);
         candidateUrls.push(endpoint);
 
         // 3. Fallbacks for localhost development
         candidateUrls.push(`http://127.0.0.1:8501/_stcore${{baseEndpoint}}`);
         candidateUrls.push(`http://127.0.0.1:8501${{endpoint}}`);
+        candidateUrls.push(`http://localhost:8501/_stcore${{baseEndpoint}}`);
+        candidateUrls.push(`http://localhost:8501${{endpoint}}`);
         candidateUrls.push(`http://127.0.0.1:8502${{endpoint}}`);
         candidateUrls.push(`http://localhost:8502${{endpoint}}`);
 
@@ -1933,9 +1969,15 @@ setTimeout(function() {{
             try {{
                 const resp = await fetch(url, options);
                 if (resp.ok) {{
-                    return await resp.json();
+                    const cType = resp.headers.get('content-type') || '';
+                    if (cType.indexOf('application/json') !== -1) {{
+                        return await resp.json();
+                    }} else {{
+                        const errTxt = await resp.text().catch(() => '');
+                        const snippet = errTxt.slice(0, 40).replace(/[\r\n]+/g, ' ');
+                        attemptedErrors.push(`${{url}} [Non-JSON response: ${{snippet}}]`);
+                    }}
                 }} else {{
-                    const errTxt = await resp.text().catch(() => '');
                     attemptedErrors.push(`${{url}} [HTTP ${{resp.status}}]`);
                 }}
             }} catch (err) {{

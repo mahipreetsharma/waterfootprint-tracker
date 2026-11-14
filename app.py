@@ -1908,7 +1908,7 @@ setTimeout(function() {{
         }} catch (e) {{}}
 
         const candidateUrls = [];
-        const baseEndpoint = endpoint.replace(/^\/api/, '');
+        const baseEndpoint = endpoint.startsWith('/api') ? endpoint.slice(4) : endpoint;
 
         // 1. Parent origin targets (works on Streamlit Cloud over HTTPS)
         if (parentOrigin) {{

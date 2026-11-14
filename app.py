@@ -1942,7 +1942,7 @@ setTimeout(function() {{
                 attemptedErrors.push(`${{url}} [${{err.message || 'Fetch failed'}}]`);
             }}
         }}
-        console.warn('Vision API candidate failures:\n' + attemptedErrors.join('\n'));
+        console.warn('Vision API candidate failures: ' + attemptedErrors.join(' | '));
         const firstErr = attemptedErrors[0] || 'Inference service unreachable';
         throw new Error(firstErr);
     }};

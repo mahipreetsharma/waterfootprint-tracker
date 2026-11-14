@@ -1179,7 +1179,7 @@ setTimeout(function() {{
         <button class="chapter-btn active" data-progress="0.0">1. Story</button>
         <button class="chapter-btn" data-progress="0.28">2. Science</button>
         <button class="chapter-btn" data-progress="0.52">3. Calculator</button>
-        <button class="chapter-btn" data-progress="0.75">4. Vision AI</button>
+        <button class="chapter-btn" data-progress="0.75">4. YOLO26N Vision Lab</button>
         <button class="chapter-btn" data-progress="0.95">5. Action</button>
     </div>
 
@@ -1217,11 +1217,11 @@ setTimeout(function() {{
             <p class="sub-title">Search our verified product catalog, adjust the quantity, and audit the cumulative supply chain freshwater impact.</p>
         </div>
 
-        <!-- Heading 4: Vision AI -->
+        <!-- Heading 4: YOLO26N Vision & Water Footprint Lab -->
         <div id="top-3" class="top-heading-item">
             <div class="eyebrow-tag"><span>ACT 4 · COMPUTER VISION TELEMETRY</span></div>
-            <h2 class="main-title"><span class="gradient-title">AI Object & Live Camera Scanner</span></h2>
-            <p class="sub-title">Point your camera or upload a photo. Our Ultralytics YOLO vision model detects goods and extracts embedded water telemetry.</p>
+            <h2 class="main-title"><span class="gradient-title">YOLO26N Vision & Water Footprint Lab</span></h2>
+            <p class="sub-title">Point your camera or upload a photo. Our YOLO26N neural vision model detects objects in real-time and extracts embedded water telemetry.</p>
         </div>
 
         <!-- Heading 5: Action -->
@@ -1378,7 +1378,7 @@ setTimeout(function() {{
                     </div>
                     <div class="vision-telemetry">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <span style="font-size:0.72rem; font-weight:800; color:var(--cyan-glow); letter-spacing:0.1em; text-transform:uppercase;">YOLO26N Vision Engine</span>
+                            <span style="font-size:0.72rem; font-weight:800; color:var(--cyan-glow); letter-spacing:0.1em; text-transform:uppercase;">YOLO26N Vision & Water Footprint Lab</span>
                             <span id="v-status-badge" style="font-size:0.68rem; color:var(--text-mid);">0 items</span>
                         </div>
                         <div class="vision-tag-pill" style="min-height:2.2rem; align-items:center; display:flex; justify-content:space-between;">
@@ -1772,7 +1772,7 @@ setTimeout(function() {{
         if (p < 0.22) phaseTag.textContent = 'ACT 1 · INCEPTION';
         else if (p < 0.44) phaseTag.textContent = 'ACT 2 · THE 3 PILLARS';
         else if (p < 0.68) phaseTag.textContent = 'ACT 3 · CALCULATOR';
-        else if (p < 0.90) phaseTag.textContent = 'ACT 4 · VISION AI';
+        else if (p < 0.90) phaseTag.textContent = 'ACT 4 · YOLO26N VISION & WATER LAB';
         else phaseTag.textContent = 'ACT 5 · CONSERVATION';
     }}
 

@@ -10,4 +10,6 @@ test_vision.py
 test_atlas.py
 upload_atlas.py
 .vscode/
+temp_uploads/
+*.tmp
 

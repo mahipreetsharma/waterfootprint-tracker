@@ -18,6 +18,8 @@ import os
 import shutil
 import socketserver
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +72,55 @@ def _prepare_static_assets() -> int:
 
 
 TOTAL_FRAMES = _prepare_static_assets() or 199
+
+# -----------------------------------------------------------------------------
+# 2b. Temporary Storage Pipeline with Automated Time-Based Pruning
+# -----------------------------------------------------------------------------
+TEMP_UPLOADS_DIR = BASE_DIR / "temp_uploads"
+TEMP_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_FILE_TTL_SECONDS = 300  # Temporary images are automatically deleted after 5 minutes (300s)
+
+
+def cleanup_temp_uploads(max_age_seconds: int = TEMP_FILE_TTL_SECONDS) -> int:
+    """Purge temporary upload files older than max_age_seconds."""
+    now = time.time()
+    deleted_count = 0
+    if not TEMP_UPLOADS_DIR.exists():
+        return 0
+
+    for file_path in TEMP_UPLOADS_DIR.glob("*.*"):
+        try:
+            if file_path.is_file():
+                file_age = now - file_path.stat().st_mtime
+                if file_age >= max_age_seconds:
+                    file_path.unlink(missing_ok=True)
+                    deleted_count += 1
+        except OSError:
+            pass
+    return deleted_count
+
+
+def save_temp_image(img_bytes: bytes, prefix: str = "upload") -> Path:
+    """Save image bytes to temporary storage and trigger background prune."""
+    cleanup_temp_uploads()
+    filename = f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
+    dest = TEMP_UPLOADS_DIR / filename
+    dest.write_bytes(img_bytes)
+    return dest
+
+
+def _start_temp_cleanup_daemon() -> None:
+    """Background daemon thread to periodically clean up expired temporary uploads."""
+    def _worker():
+        while True:
+            time.sleep(60)
+            cleanup_temp_uploads()
+
+    cleanup_thread = threading.Thread(target=_worker, daemon=True)
+    cleanup_thread.start()
+
+
+_start_temp_cleanup_daemon()
 
 # -----------------------------------------------------------------------------
 # 3. Database Preparation & YOLO Vision API Server
@@ -197,6 +248,9 @@ class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps({"status": "error", "message": "Invalid image"}).encode("utf-8"))
                     return
 
+                # Store image temporarily in temp_uploads with automatic time-based deletion
+                save_temp_image(img_bytes, prefix="upload")
+
                 self._process_image_and_reply(frame)
             except Exception as e:
                 self._send_cors(500)
@@ -207,7 +261,7 @@ class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/status":
             self._send_cors(200)
-            self.wfile.write(json.dumps({"status": "active", "model": "yolo26n"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"status": "active", "model": "yolo26n", "temp_ttl_sec": TEMP_FILE_TTL_SECONDS}).encode("utf-8"))
         elif self.path == "/api/capture_opencv":
             try:
                 cap = cv2.VideoCapture(0)
@@ -221,6 +275,11 @@ class VisionAPIHandler(http.server.BaseHTTPRequestHandler):
                     self._send_cors(500)
                     self.wfile.write(json.dumps({"status": "error", "message": "Failed to read camera frame"}).encode("utf-8"))
                     return
+
+                # Store frame temporarily in temp_uploads with automatic time-based deletion
+                _, enc = cv2.imencode(".jpg", frame)
+                save_temp_image(enc.tobytes(), prefix="opencv")
+
                 self._process_image_and_reply(frame)
             except Exception as e:
                 self._send_cors(500)
@@ -241,7 +300,7 @@ def ensure_vision_server() -> None:
                 daemon_threads = True
                 allow_reuse_address = True
 
-            server = ReusableTCPServer(("127.0.0.1", 8502), VisionAPIHandler)
+            server = ReusableTCPServer(("0.0.0.0", 8502), VisionAPIHandler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             VisionServerState.server = server
@@ -1060,24 +1119,41 @@ html, body {{
             </div>
         </div>
 
-        <!-- Bottom 4: YOLO26N Computer Vision & Live Webcam Panel -->
+        <!-- Bottom 4: YOLO26N Computer Vision & Live Webcam / Photo Upload Panel -->
         <div id="bottom-3" class="bottom-interactive-card">
             <div class="glass-box">
+                <!-- Mode Selector Row Upon Live Camera -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:0.55rem;">
+                    <div style="display:flex; gap:0.4rem;" id="vision-tabs">
+                        <button class="vision-mode-tab active" id="tab-mode-upload" style="background:rgba(34,211,238,0.18); border:1px solid var(--cyan-glow); color:#fff; border-radius:999px; padding:0.25rem 0.75rem; font-size:0.74rem; font-weight:700; cursor:pointer;">
+                            📁 Upload Photo
+                        </button>
+                        <button class="vision-mode-tab" id="tab-mode-webcam" style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); color:var(--text-mid); border-radius:999px; padding:0.25rem 0.75rem; font-size:0.74rem; font-weight:600; cursor:pointer;">
+                            📹 Live Webcam
+                        </button>
+                        <button class="vision-mode-tab" id="tab-mode-opencv" style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); color:var(--text-mid); border-radius:999px; padding:0.25rem 0.75rem; font-size:0.74rem; font-weight:600; cursor:pointer;">
+                            📸 OpenCV Scan
+                        </button>
+                    </div>
+                    <span id="cam-status" style="font-size:0.68rem; color:var(--text-low);">● Ready to analyze</span>
+                </div>
+
                 <div class="vision-grid">
-                    <div class="video-container" id="video-box" style="position:relative; overflow:hidden;">
+                    <div class="video-container" id="video-box" style="position:relative; overflow:hidden; cursor:pointer;" title="Click or drop an image file here to analyze">
+                        <input type="file" id="image-file-input" accept="image/jpeg,image/png,image/webp,image/jpg" style="display:none;">
                         <video id="webcam-stream" autoplay playsinline muted></video>
-                        <img id="annotated-stream" style="width:100%; height:100%; object-fit:cover; position:absolute; top:0; left:0; display:none; border-radius:10px; z-index:2;" alt="YOLO Detection Overlay">
+                        <img id="annotated-stream" style="width:100%; height:100%; object-fit:contain; position:absolute; top:0; left:0; display:none; border-radius:10px; z-index:2; background:#040608;" alt="YOLO Detection Overlay">
                         <div class="bounding-box-mock" id="box-mock"></div>
                         <div class="video-placeholder" id="video-ph">
-                            <div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div>
-                            <div style="font-weight:700; color:#fff;">Live YOLO26n Vision Scanner</div>
-                            <div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Point camera at items (phone, bottle, cup, laptop, apple, book)</div>
+                            <div style="font-size:1.8rem; margin-bottom:0.3rem;">📁</div>
+                            <div style="font-weight:700; color:#fff;">Drop Photo Here or Click to Upload</div>
+                            <div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">YOLO26n will detect objects and calculate embedded water</div>
                         </div>
                     </div>
                     <div class="vision-telemetry">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <span style="font-size:0.72rem; font-weight:800; color:var(--cyan-glow); letter-spacing:0.1em; text-transform:uppercase;">YOLO26N Vision Engine</span>
-                            <span id="cam-status" style="font-size:0.68rem; color:var(--text-low);">● Offline</span>
+                            <span id="v-status-badge" style="font-size:0.68rem; color:var(--text-mid);">0 items</span>
                         </div>
                         <div class="vision-tag-pill" style="min-height:2.2rem; align-items:center; display:flex; justify-content:space-between;">
                             <span style="color:var(--text-mid); font-size:0.75rem;">Detected:</span>
@@ -1097,12 +1173,12 @@ html, body {{
                         <div id="v-equiv" style="font-size:0.68rem; color:var(--text-mid); text-align:center; padding:3px 6px; background:rgba(255,255,255,0.02); border-radius:6px; margin-top:2px;">
                             Equivalents: <span id="v-showers">0</span> showers · <span id="v-days">0</span> drinking days
                         </div>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
-                            <button class="btn-pill" id="toggle-cam-btn" style="padding:0.55rem; background:linear-gradient(135deg, #0284c7, #22d3ee); color:#fff; border:none; font-weight:700; font-size:0.78rem;">
-                                ▶ Live Webcam
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;" id="vision-action-buttons">
+                            <button class="btn-pill" id="upload-trigger-btn" style="padding:0.55rem; background:linear-gradient(135deg, #0284c7, #22d3ee); color:#fff; border:none; font-weight:700; font-size:0.78rem;">
+                                📁 Choose Photo
                             </button>
-                            <button class="btn-pill" id="opencv-scan-btn" style="padding:0.55rem; background:rgba(255,255,255,0.07); color:#fff; border:1px solid rgba(255,255,255,0.15); font-weight:700; font-size:0.78rem;">
-                                📸 OpenCV Scan
+                            <button class="btn-pill" id="toggle-cam-btn" style="padding:0.55rem; background:rgba(255,255,255,0.07); color:#fff; border:1px solid rgba(255,255,255,0.15); font-weight:700; font-size:0.78rem;">
+                                ▶ Start Webcam
                             </button>
                         </div>
                     </div>
@@ -1585,15 +1661,21 @@ html, body {{
     }});
 
     // =========================================================================
-    // CHAPTER 4: YOLO26N REAL-TIME COMPUTER VISION SCANNER
+    // CHAPTER 4: YOLO26N REAL-TIME COMPUTER VISION SCANNER & PHOTO UPLOAD
     // =========================================================================
     const toggleCamBtn = document.getElementById('toggle-cam-btn');
-    const opencvScanBtn = document.getElementById('opencv-scan-btn');
+    const uploadTriggerBtn = document.getElementById('upload-trigger-btn');
+    const imageFileInput = document.getElementById('image-file-input');
+    const tabModeUpload = document.getElementById('tab-mode-upload');
+    const tabModeWebcam = document.getElementById('tab-mode-webcam');
+    const tabModeOpencv = document.getElementById('tab-mode-opencv');
+    const videoBox = document.getElementById('video-box');
     const webcamStream = document.getElementById('webcam-stream');
     const annotatedStream = document.getElementById('annotated-stream');
     const boxMock = document.getElementById('box-mock');
     const videoPh = document.getElementById('video-ph');
     const camStatus = document.getElementById('cam-status');
+    const vStatusBadge = document.getElementById('v-status-badge');
     const vObject = document.getElementById('v-object');
     const vFootprint = document.getElementById('v-footprint');
     const vBlue = document.getElementById('v-blue');
@@ -1610,6 +1692,11 @@ html, body {{
     const captureCanvas = document.createElement('canvas');
     const captureCtx = captureCanvas.getContext('2d');
 
+    const getVisionApiUrl = (endpoint) => {{
+        const host = (window.parent && window.parent.location && window.parent.location.hostname) || window.location.hostname || '127.0.0.1';
+        return `http://${{host}}:8502${{endpoint}}`;
+    }};
+
     // Ensure parent iframe permits camera access
     try {{
         if (window.parent && window.parent.document) {{
@@ -1619,6 +1706,165 @@ html, body {{
         }}
     }} catch (e) {{}}
 
+    const setModeTabActive = (mode) => {{
+        const tabs = [
+            {{ el: tabModeUpload, id: 'upload' }},
+            {{ el: tabModeWebcam, id: 'webcam' }},
+            {{ el: tabModeOpencv, id: 'opencv' }}
+        ];
+        tabs.forEach(t => {{
+            if (t.id === mode) {{
+                t.el.style.background = 'rgba(34,211,238,0.18)';
+                t.el.style.borderColor = 'var(--cyan-glow)';
+                t.el.style.color = '#fff';
+            }} else {{
+                t.el.style.background = 'rgba(255,255,255,0.05)';
+                t.el.style.borderColor = 'rgba(255,255,255,0.1)';
+                t.el.style.color = 'var(--text-mid)';
+            }}
+        }});
+    }};
+
+    const stopWebcam = () => {{
+        if (localStream) {{
+            try {{ localStream.getTracks().forEach(t => t.stop()); }} catch (e) {{}}
+            localStream = null;
+        }}
+        if (inferenceTimer) {{ clearInterval(inferenceTimer); inferenceTimer = null; }}
+        webcamStream.style.display = 'none';
+        toggleCamBtn.textContent = '▶ Start Webcam';
+        toggleCamBtn.style.background = 'rgba(255,255,255,0.07)';
+        toggleCamBtn.style.border = '1px solid rgba(255,255,255,0.15)';
+        isCamRunning = false;
+    }};
+
+    const renderDetectionResults = (data, sourceLabel) => {{
+        if (!data || data.status !== 'ok') return;
+
+        if (data.annotated_image) {{
+            annotatedStream.src = data.annotated_image;
+            annotatedStream.style.display = 'block';
+            videoPh.style.display = 'none';
+        }}
+
+        if (data.items && data.items.length > 0) {{
+            vObject.innerHTML = data.items.map(it => 
+                `<span style="background:rgba(34,211,238,0.18); border:1px solid rgba(34,211,238,0.45); padding:2px 7px; border-radius:6px; color:#fff; font-size:0.75rem; font-weight:700;">${{it.name}}</span>`
+            ).join('');
+
+            vFootprint.textContent = Number(data.total_liters).toLocaleString() + ' Liters';
+            vBlue.textContent = Number(data.total_blue).toLocaleString() + 'L';
+            vGreen.textContent = Number(data.total_green).toLocaleString() + 'L';
+            vGrey.textContent = Number(data.total_grey).toLocaleString() + 'L';
+            vShowers.textContent = Number(data.showers).toLocaleString();
+            vDays.textContent = Number(data.drinking_days).toLocaleString();
+            if (vStatusBadge) vStatusBadge.textContent = data.items.length + ' item(s)';
+            camStatus.textContent = '● ' + (sourceLabel || 'YOLO26N') + ': ' + data.items.length + ' Object(s) Identified';
+            camStatus.style.color = 'var(--cyan-glow)';
+        }} else {{
+            vObject.innerHTML = '<span style="color:var(--text-low); font-style:italic; font-size:0.75rem;">No supported object matched in database</span>';
+            vFootprint.textContent = '0 Liters';
+            vBlue.textContent = '0L';
+            vGreen.textContent = '0L';
+            vGrey.textContent = '0L';
+            vShowers.textContent = '0';
+            vDays.textContent = '0';
+            if (vStatusBadge) vStatusBadge.textContent = '0 items';
+            camStatus.textContent = '● ' + (sourceLabel || 'YOLO26N') + ': Zero Objects Detected';
+            camStatus.style.color = '#38bdf8';
+        }}
+    }};
+
+    // ==========================================
+    // 1. Photo Upload & Drag-and-Drop Handler
+    // ==========================================
+    const analyzeImageFile = (file) => {{
+        if (!file || !file.type.startsWith('image/')) {{
+            alert('Please select an image file (JPG, PNG, or WEBP).');
+            return;
+        }}
+        stopWebcam();
+        setModeTabActive('upload');
+
+        camStatus.textContent = '● Analyzing Photo with YOLO26N...';
+        camStatus.style.color = '#38bdf8';
+        videoPh.style.display = 'none';
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {{
+            const dataUrl = e.target.result;
+            annotatedStream.src = dataUrl;
+            annotatedStream.style.display = 'block';
+
+            try {{
+                const resp = await fetch(getVisionApiUrl('/api/detect'), {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ image: dataUrl }})
+                }});
+
+                if (resp.ok) {{
+                    const data = await resp.json();
+                    renderDetectionResults(data, 'Uploaded Photo');
+                }} else {{
+                    camStatus.textContent = '● Analysis Failed';
+                    camStatus.style.color = '#ef4444';
+                }}
+            }} catch (err) {{
+                console.warn('Upload inference call failed:', err);
+                camStatus.textContent = '● API Server Offline';
+                camStatus.style.color = '#ef4444';
+            }}
+        }};
+        reader.readAsDataURL(file);
+    }};
+
+    imageFileInput.addEventListener('change', (e) => {{
+        if (e.target.files && e.target.files[0]) {{
+            analyzeImageFile(e.target.files[0]);
+        }}
+    }});
+
+    uploadTriggerBtn.addEventListener('click', () => {{
+        imageFileInput.click();
+    }});
+
+    tabModeUpload.addEventListener('click', () => {{
+        stopWebcam();
+        setModeTabActive('upload');
+        imageFileInput.click();
+    }});
+
+    // Drag and drop onto video box
+    videoBox.addEventListener('click', (e) => {{
+        if (!isCamRunning && e.target !== toggleCamBtn && e.target !== uploadTriggerBtn) {{
+            imageFileInput.click();
+        }}
+    }});
+
+    videoBox.addEventListener('dragover', (e) => {{
+        e.preventDefault();
+        videoBox.style.borderColor = 'var(--cyan-glow)';
+        videoBox.style.background = 'rgba(34, 211, 238, 0.08)';
+    }});
+
+    videoBox.addEventListener('dragleave', () => {{
+        videoBox.style.borderColor = 'rgba(34, 211, 238, 0.3)';
+        videoBox.style.background = '#060a0f';
+    }});
+
+    videoBox.addEventListener('drop', (e) => {{
+        e.preventDefault();
+        videoBox.style.borderColor = 'rgba(34, 211, 238, 0.3)';
+        videoBox.style.background = '#060a0f';
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {{
+            analyzeImageFile(e.dataTransfer.files[0]);
+        }}
+    }});
+
+    // ==========================================
+    // 2. WebRTC Live Camera Streaming Handler
+    // ==========================================
     const acquireMediaStream = async () => {{
         const constraintsList = [
             {{ video: {{ width: {{ ideal: 640 }}, height: {{ ideal: 480 }}, facingMode: 'user' }} }},
@@ -1642,41 +1888,6 @@ html, body {{
         throw lastErr || new Error('No webcam access available');
     }};
 
-    const renderDetectionResults = (data) => {{
-        if (!data || data.status !== 'ok') return;
-
-        // Render annotated frame if available
-        if (data.annotated_image) {{
-            annotatedStream.src = data.annotated_image;
-            annotatedStream.style.display = 'block';
-        }}
-
-        if (data.items && data.items.length > 0) {{
-            vObject.innerHTML = data.items.map(it => 
-                `<span style="background:rgba(34,211,238,0.18); border:1px solid rgba(34,211,238,0.45); padding:2px 7px; border-radius:6px; color:#fff; font-size:0.75rem; font-weight:700;">${{it.name}}</span>`
-            ).join('');
-
-            vFootprint.textContent = Number(data.total_liters).toLocaleString() + ' Liters';
-            vBlue.textContent = Number(data.total_blue).toLocaleString() + 'L';
-            vGreen.textContent = Number(data.total_green).toLocaleString() + 'L';
-            vGrey.textContent = Number(data.total_grey).toLocaleString() + 'L';
-            vShowers.textContent = Number(data.showers).toLocaleString();
-            vDays.textContent = Number(data.drinking_days).toLocaleString();
-            camStatus.textContent = '● YOLO26N: ' + data.items.length + ' Object(s) Identified';
-            camStatus.style.color = 'var(--cyan-glow)';
-        }} else {{
-            vObject.innerHTML = '<span style="color:var(--text-low); font-style:italic; font-size:0.75rem;">Scanning… (Show bottle, phone, cup, laptop, apple)</span>';
-            vFootprint.textContent = '0 Liters';
-            vBlue.textContent = '0L';
-            vGreen.textContent = '0L';
-            vGrey.textContent = '0L';
-            vShowers.textContent = '0';
-            vDays.textContent = '0';
-            camStatus.textContent = '● YOLO26N Active · Live Inference';
-            camStatus.style.color = '#38bdf8';
-        }}
-    }};
-
     const runFrameInference = async () => {{
         if (!isCamRunning || isDetecting) return;
         if (!webcamStream.videoWidth) return;
@@ -1688,7 +1899,7 @@ html, body {{
             captureCtx.drawImage(webcamStream, 0, 0, 480, 360);
             const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.72);
 
-            const resp = await fetch('http://127.0.0.1:8502/api/detect', {{
+            const resp = await fetch(getVisionApiUrl('/api/detect'), {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ image: dataUrl }})
@@ -1696,7 +1907,7 @@ html, body {{
 
             if (resp.ok) {{
                 const data = await resp.json();
-                renderDetectionResults(data);
+                renderDetectionResults(data, 'Live Webcam');
             }}
         }} catch (err) {{
             console.warn('YOLO inference call failed:', err);
@@ -1705,68 +1916,67 @@ html, body {{
         }}
     }};
 
-    toggleCamBtn.addEventListener('click', async () => {{
-        if (!isCamRunning) {{
-            camStatus.textContent = '● Connecting Camera...';
-            camStatus.style.color = '#38bdf8';
-            try {{
-                localStream = await acquireMediaStream();
-                webcamStream.srcObject = localStream;
-                webcamStream.style.display = 'block';
-                videoPh.style.display = 'none';
-                boxMock.style.display = 'none';
-                await webcamStream.play();
-
-                camStatus.textContent = '● Live YOLO26n Stream Active';
-                camStatus.style.color = 'var(--cyan-glow)';
-                toggleCamBtn.textContent = '■ Stop Live Camera';
-                toggleCamBtn.style.background = 'rgba(239, 68, 68, 0.25)';
-                toggleCamBtn.style.border = '1px solid rgba(239, 68, 68, 0.5)';
-                isCamRunning = true;
-
-                // Continuous YOLO inference loop (~2.5 FPS)
-                inferenceTimer = setInterval(runFrameInference, 400);
-
-            }} catch (err) {{
-                console.warn('Camera stream could not start:', err);
-                webcamStream.style.display = 'none';
-                videoPh.style.display = 'block';
-                videoPh.innerHTML = '<div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div><div style="color:var(--cyan-glow); font-weight:700;">Webcam Blocked · Use OpenCV Scan</div><div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Or click OpenCV Scan to capture directly from host camera 0</div>';
-                camStatus.textContent = '● Camera Blocked';
-                camStatus.style.color = '#f59e0b';
-            }}
-        }} else {{
-            if (localStream) {{
-                try {{
-                    localStream.getTracks().forEach(t => t.stop());
-                }} catch (e) {{}}
-                localStream = null;
-            }}
-            if (inferenceTimer) clearInterval(inferenceTimer);
-            webcamStream.style.display = 'none';
+    const startWebcam = async () => {{
+        setModeTabActive('webcam');
+        camStatus.textContent = '● Connecting Camera...';
+        camStatus.style.color = '#38bdf8';
+        try {{
+            localStream = await acquireMediaStream();
+            webcamStream.srcObject = localStream;
+            webcamStream.style.display = 'block';
             annotatedStream.style.display = 'none';
-            videoPh.style.display = 'block';
-            videoPh.innerHTML = '<div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div><div style="font-weight:700; color:#fff;">Live YOLO26n Vision Scanner</div><div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Point camera at items (phone, bottle, cup, laptop, apple, book)</div>';
+            videoPh.style.display = 'none';
             boxMock.style.display = 'none';
+            await webcamStream.play();
+
+            camStatus.textContent = '● Live YOLO26n Stream Active';
+            camStatus.style.color = 'var(--cyan-glow)';
+            toggleCamBtn.textContent = '■ Stop Webcam';
+            toggleCamBtn.style.background = 'rgba(239, 68, 68, 0.25)';
+            toggleCamBtn.style.border = '1px solid rgba(239, 68, 68, 0.5)';
+            isCamRunning = true;
+
+            inferenceTimer = setInterval(runFrameInference, 400);
+        }} catch (err) {{
+            console.warn('Camera stream could not start:', err);
+            webcamStream.style.display = 'none';
+            videoPh.style.display = 'block';
+            videoPh.innerHTML = '<div style="font-size:1.8rem; margin-bottom:0.3rem;">📷</div><div style="color:var(--cyan-glow); font-weight:700;">Webcam Blocked · Use Upload or OpenCV</div><div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">Click Upload Photo above or drop an image here</div>';
+            camStatus.textContent = '● Camera Blocked';
+            camStatus.style.color = '#f59e0b';
+        }}
+    }};
+
+    toggleCamBtn.addEventListener('click', () => {{
+        if (!isCamRunning) {{
+            startWebcam();
+        }} else {{
+            stopWebcam();
+            videoPh.style.display = 'block';
+            videoPh.innerHTML = '<div style="font-size:1.8rem; margin-bottom:0.3rem;">📁</div><div style="font-weight:700; color:#fff;">Drop Photo Here or Click to Upload</div><div style="font-size:0.72rem; color:var(--text-mid); margin-top:0.2rem;">YOLO26n will detect objects and calculate embedded water</div>';
             camStatus.textContent = '● Offline';
             camStatus.style.color = 'var(--text-low)';
-            toggleCamBtn.textContent = '▶ Live Webcam';
-            toggleCamBtn.style.background = 'linear-gradient(135deg, #0284c7, #22d3ee)';
-            toggleCamBtn.style.border = 'none';
-            isCamRunning = false;
         }}
     }});
 
-    // OpenCV direct hardware scan button
-    opencvScanBtn.addEventListener('click', async () => {{
+    tabModeWebcam.addEventListener('click', () => {{
+        if (!isCamRunning) startWebcam();
+    }});
+
+    // ==========================================
+    // 3. OpenCV Direct Hardware Capture Handler
+    // ==========================================
+    tabModeOpencv.addEventListener('click', async () => {{
+        stopWebcam();
+        setModeTabActive('opencv');
         camStatus.textContent = '● Scanning via OpenCV cv2.VideoCapture(0)...';
         camStatus.style.color = '#38bdf8';
         videoPh.style.display = 'none';
         try {{
-            const resp = await fetch('http://127.0.0.1:8502/api/capture_opencv');
+            const resp = await fetch(getVisionApiUrl('/api/capture_opencv'));
             if (resp.ok) {{
                 const data = await resp.json();
-                renderDetectionResults(data);
+                renderDetectionResults(data, 'OpenCV Hardware');
                 annotatedStream.style.display = 'block';
             }} else {{
                 const errData = await resp.json();

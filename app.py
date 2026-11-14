@@ -223,7 +223,7 @@ def run_detection_pipeline(img_bytes: bytes) -> dict[str, Any]:
 
 
 def inject_starlette_api_route() -> None:
-    """Dynamically register /api/detect on the main Streamlit server port (works on Streamlit Cloud HTTPS)."""
+    """Dynamically register /_stcore/detect and /api/detect on the main Streamlit server port (works on Streamlit Cloud HTTPS)."""
     try:
         import gc
         from starlette.applications import Starlette
@@ -233,7 +233,7 @@ def inject_starlette_api_route() -> None:
         apps = [obj for obj in gc.get_objects() if isinstance(obj, Starlette)]
         for app in apps:
             existing_paths = [getattr(r, "path", None) for r in getattr(app, "routes", [])]
-            if "/api/detect" in existing_paths:
+            if "/_stcore/detect" in existing_paths:
                 continue
 
             async def api_detect(request):
@@ -257,29 +257,36 @@ def inject_starlette_api_route() -> None:
             async def api_status(request):
                 return JSONResponse({"status": "active", "model": "yolo26n"}, headers={"Access-Control-Allow-Origin": "*"})
 
+            app.routes.insert(0, Route("/_stcore/detect", api_detect, methods=["POST", "OPTIONS"]))
+            app.routes.insert(0, Route("/_stcore/status", api_status, methods=["GET", "OPTIONS"]))
             app.routes.insert(0, Route("/api/detect", api_detect, methods=["POST", "OPTIONS"]))
             app.routes.insert(0, Route("/api/status", api_status, methods=["GET", "OPTIONS"]))
     except Exception:
         pass
 
-    # Also support Tornado if running in Tornado mode
+    # Also support Tornado if running in Tornado mode (Standard Streamlit Server engine)
     try:
         import gc
         import tornado.web
+        from tornado.web import URLSpec
+        try:
+            from tornado.routing import Rule, PathMatches
+        except ImportError:
+            Rule = None
+            PathMatches = None
 
-        tornado_apps = [obj for obj in gc.get_objects() if isinstance(obj, tornado.web.Application)]
-        for tapp in tornado_apps:
-            class TornadoDetectHandler(tornado.web.RequestHandler):
-                def set_default_headers(self):
-                    self.set_header("Access-Control-Allow-Origin", "*")
-                    self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                    self.set_header("Access-Control-Allow-Headers", "Content-Type")
+        class TornadoDetectHandler(tornado.web.RequestHandler):
+            def set_default_headers(self):
+                self.set_header("Access-Control-Allow-Origin", "*")
+                self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+                self.set_header("Access-Control-Allow-Headers", "Content-Type")
 
-                def options(self):
-                    self.set_status(200)
-                    self.finish()
+            def options(self, *args, **kwargs):
+                self.set_status(204)
+                self.finish()
 
-                def post(self):
+            def post(self, *args, **kwargs):
+                try:
                     data = json.loads(self.request.body.decode("utf-8"))
                     img_data = data.get("image", "")
                     if "," in img_data:
@@ -288,11 +295,79 @@ def inject_starlette_api_route() -> None:
                     result = run_detection_pipeline(img_bytes)
                     self.set_header("Content-Type", "application/json")
                     self.write(json.dumps(result))
+                except Exception as e:
+                    self.set_status(500)
+                    self.set_header("Content-Type", "application/json")
+                    self.write(json.dumps({"status": "error", "message": str(e)}))
 
-                def get(self):
-                    self.write(json.dumps({"status": "active", "model": "yolo26n"}))
+            def get(self, *args, **kwargs):
+                self.set_header("Content-Type", "application/json")
+                self.write(json.dumps({"status": "active", "model": "yolo26n"}))
 
-            tapp.add_handlers(r".*", [(r"/api/detect", TornadoDetectHandler), (r"/api/status", TornadoDetectHandler)])
+        tornado_apps = set()
+        for mod_name in ["streamlit.web.server.server", "streamlit.server.server"]:
+            try:
+                mod = __import__(mod_name, fromlist=["Server"])
+                srv = getattr(mod, "Server", None)
+                if srv and hasattr(srv, "get_current"):
+                    inst = srv.get_current()
+                    if inst and hasattr(inst, "_app") and isinstance(inst._app, tornado.web.Application):
+                        tornado_apps.add(inst._app)
+            except Exception:
+                pass
+
+        for obj in gc.get_objects():
+            if isinstance(obj, tornado.web.Application):
+                tornado_apps.add(obj)
+
+        for tapp in tornado_apps:
+            # 1. Prepend to wildcard_router rules so it runs before /(.*)
+            if hasattr(tapp, "wildcard_router") and hasattr(tapp.wildcard_router, "rules"):
+                for r in tapp.wildcard_router.rules:
+                    target = getattr(r, "target", None)
+                    if hasattr(target, "rules") and Rule and PathMatches:
+                        existing_rules = [getattr(getattr(sub, "matcher", None), "regex", None) for sub in target.rules]
+                        existing_pats = [p.pattern if p else "" for p in existing_rules]
+                        if r"/_stcore/detect" not in existing_pats:
+                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/detect"), TornadoDetectHandler))
+                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/status"), TornadoDetectHandler))
+                            target.rules.insert(0, Rule(PathMatches(r"/api/detect"), TornadoDetectHandler))
+                            target.rules.insert(0, Rule(PathMatches(r"/api/status"), TornadoDetectHandler))
+
+            # 2. Prepend to default_router rules
+            if hasattr(tapp, "default_router") and hasattr(tapp.default_router, "rules"):
+                for r in tapp.default_router.rules:
+                    target = getattr(r, "target", None)
+                    if hasattr(target, "rules") and Rule and PathMatches:
+                        existing_rules = [getattr(getattr(sub, "matcher", None), "regex", None) for sub in target.rules]
+                        existing_pats = [p.pattern if p else "" for p in existing_rules]
+                        if r"/_stcore/detect" not in existing_pats:
+                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/detect"), TornadoDetectHandler))
+                            target.rules.insert(0, Rule(PathMatches(r"/_stcore/status"), TornadoDetectHandler))
+                            target.rules.insert(0, Rule(PathMatches(r"/api/detect"), TornadoDetectHandler))
+                            target.rules.insert(0, Rule(PathMatches(r"/api/status"), TornadoDetectHandler))
+
+            # 3. Prepend to handlers list
+            if hasattr(tapp, "handlers"):
+                for host_matcher, host_handlers in tapp.handlers:
+                    existing = [getattr(spec, "regex", None) for spec in host_handlers]
+                    existing_patterns = [e.pattern if e else "" for e in existing]
+                    if r"/_stcore/detect" not in existing_patterns:
+                        host_handlers.insert(0, URLSpec(r"/_stcore/detect", TornadoDetectHandler))
+                        host_handlers.insert(0, URLSpec(r"/_stcore/status", TornadoDetectHandler))
+                        host_handlers.insert(0, URLSpec(r"/api/detect", TornadoDetectHandler))
+                        host_handlers.insert(0, URLSpec(r"/api/status", TornadoDetectHandler))
+
+            # 4. Standard fallback add_handlers
+            try:
+                tapp.add_handlers(r".*", [
+                    (r"/_stcore/detect", TornadoDetectHandler),
+                    (r"/_stcore/status", TornadoDetectHandler),
+                    (r"/api/detect", TornadoDetectHandler),
+                    (r"/api/status", TornadoDetectHandler),
+                ])
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1766,21 +1841,44 @@ html, body {{
     const captureCtx = captureCanvas.getContext('2d');
 
     const callVisionApi = async (endpoint, options = {{}}) => {{
-        const candidateUrls = [];
-
-        // 1. Same-origin primary URL (main Streamlit server: port 8501 locally or HTTPS on Streamlit Cloud)
+        let parentOrigin = '';
         try {{
-            if (window.parent && window.parent.location && window.parent.location.origin) {{
-                candidateUrls.push(window.parent.location.origin + endpoint);
+            if (window.location && window.location.ancestorOrigins && window.location.ancestorOrigins[0]) {{
+                parentOrigin = window.location.ancestorOrigins[0];
             }}
         }} catch (e) {{}}
+
+        if (!parentOrigin && document.referrer) {{
+            try {{
+                parentOrigin = new URL(document.referrer).origin;
+            }} catch (e) {{}}
+        }}
+
+        try {{
+            if (!parentOrigin && window.parent && window.parent.location && window.parent.location.origin) {{
+                parentOrigin = window.parent.location.origin;
+            }}
+        }} catch (e) {{}}
+
+        const candidateUrls = [];
+        const baseEndpoint = endpoint.replace(/^\/api/, '');
+
+        // 1. Parent origin targets (works on Streamlit Cloud over HTTPS)
+        if (parentOrigin) {{
+            candidateUrls.push(parentOrigin + '/_stcore' + baseEndpoint);
+            candidateUrls.push(parentOrigin + '/api' + baseEndpoint);
+            candidateUrls.push(parentOrigin + endpoint);
+        }}
+
+        // 2. Relative targets
+        candidateUrls.push('/_stcore' + baseEndpoint);
         candidateUrls.push(endpoint);
 
-        // 2. Secondary fallback for standalone localhost:8502
-        try {{
-            const host = (window.parent && window.parent.location && window.parent.location.hostname) || window.location.hostname || '127.0.0.1';
-            candidateUrls.push(`http://${{host}}:8502${{endpoint}}`);
-        }} catch (e) {{}}
+        // 3. Fallbacks for localhost development
+        candidateUrls.push(`http://127.0.0.1:8501/_stcore${{baseEndpoint}}`);
+        candidateUrls.push(`http://127.0.0.1:8501${{endpoint}}`);
+        candidateUrls.push(`http://127.0.0.1:8502${{endpoint}}`);
+        candidateUrls.push(`http://localhost:8502${{endpoint}}`);
 
         let lastErr = null;
         for (const url of candidateUrls) {{
@@ -2079,6 +2177,9 @@ html, body {{
 </body>
 </html>
 """
+
+# Ensure routes are injected on every page render/session
+inject_starlette_api_route()
 
 # Render the Single Unified Scrollytelling Viewport
 components.html(UNIFIED_HTML, height=1000, scrolling=False)

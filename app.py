@@ -2069,9 +2069,6 @@ html, body {{
             camStatus.style.color = '#ef4444';
             videoPh.style.display = 'block';
         }}
-            camStatus.style.color = '#ef4444';
-            videoPh.style.display = 'block';
-        }}
     }});
 
     // Initialize sequence
